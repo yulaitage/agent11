@@ -1,0 +1,6 @@
+*
+!.gitignore
+!agent11-backend/
+!agent11-backend/**
+!agent11-frontend /
+!agent11-frontend /**
