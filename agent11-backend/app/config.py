@@ -32,12 +32,13 @@ class Settings(BaseSettings):
     knowledge_base_path: str = "./data/knowledge"
 
     # LLM - Llama/LM Studio (OpenAI-compatible API)
-    llm_provider: Literal["ollama", "lmstudio"] = "lmstudio"
-    llm_base_url: str = "http://localhost:1234/v1"  # LM Studio default
-    llm_model: str = "qwen3.5:9b"
+    llm_provider: Literal["ollama", "lmstudio", "deepseek", "zhipu", "minimax"] = "ollama"
+    llm_base_url: str = "http://localhost:11434/v1"  # Ollama default
+    llm_model: str = "qwen3:latest"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 4096
     llm_timeout: int = 120
+    llm_api_key: str = ""  # API key for cloud providers
 
     # Embeddings
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"

@@ -209,7 +209,7 @@ class FlexibleSkill(BaseSkill):
         return plan
 
     async def _get_all_faults_for_chart(self, plan: dict) -> list[dict]:
-        """从 import_postgres_export 获取所有故障记录用于图表聚合"""
+        """从 devices_fault 获取所有故障记录用于图表聚合"""
         from app.db.session import get_session
         from sqlalchemy import text
 
@@ -217,7 +217,7 @@ class FlexibleSkill(BaseSkill):
             result = await session.execute(
                 text('''
                     SELECT fault, COUNT(*) as count
-                    FROM import_postgres_export
+                    FROM devices_fault
                     WHERE fault IS NOT NULL AND fault != ''
                     GROUP BY fault
                     ORDER BY count DESC
@@ -246,7 +246,7 @@ class FlexibleSkill(BaseSkill):
             elif time_range == "1y":
                 start_time = now - timedelta(days=365)
 
-        # 如果需要故障类型统计（如 bar chart），直接查 import_postgres_export
+        # 如果需要故障类型统计（如 bar chart），直接查 devices_fault
         if data_source == "faults" and aggregation in ("faults_by_type", "fault_summary", "compare", "bar_chart_requested"):
             results = await self._get_all_faults_for_chart(plan)
             return results

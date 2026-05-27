@@ -29,6 +29,7 @@ from app.harness.loop_operator import LoopOperator
 from app.harness.autonomous import AutonomousLoops
 from app.memory.palace import MemoryPalace
 from app.observability.metrics import MetricsCollector
+from app.middleware.logging import APILoggingMiddleware
 
 settings = get_settings()
 
@@ -75,6 +76,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# API logging middleware (logs all requests to DB)
+app.add_middleware(APILoggingMiddleware)
 
 # API Routes
 app.include_router(api_router, prefix="/api")

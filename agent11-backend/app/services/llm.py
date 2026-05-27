@@ -40,7 +40,8 @@ class LLMService:
             "model": self.settings.llm_model,
             "temperature": self.settings.llm_temperature,
             "max_tokens": self.settings.llm_max_tokens,
-            "timeout": self.settings.llm_timeout
+            "timeout": self.settings.llm_timeout,
+            "api_key": self.settings.llm_api_key,
         }
 
     def get_config(self) -> dict:
@@ -91,7 +92,10 @@ class LLMService:
 
         try:
             async with httpx.AsyncClient(timeout=self._config["timeout"]) as client:
-                response = await client.post(url, json=payload)
+                headers = {}
+                if self._config.get("api_key"):
+                    headers["Authorization"] = f"Bearer {self._config['api_key']}"
+                response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
 
                 data = response.json()
@@ -138,7 +142,10 @@ class LLMService:
         }
 
         async with httpx.AsyncClient(timeout=self._config["timeout"]) as client:
-            async with client.stream("POST", url, json=payload) as response:
+            headers = {}
+            if self._config.get("api_key"):
+                headers["Authorization"] = f"Bearer {self._config['api_key']}"
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
                 async for chunk in response.aiter_lines():
                     if chunk:
                         import json

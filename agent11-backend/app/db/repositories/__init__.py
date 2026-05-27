@@ -11,6 +11,7 @@ from app.db.repositories.group import GroupRepository
 from app.db.repositories.device_info import DeviceInfoRepository
 from app.db.repositories.device_fault import DeviceFaultRepository
 from app.db.repositories.device_consumption import DeviceConsumptionRepository
+from app.db.repositories.api_call_log import APICallLogRepository
 
 __all__ = [
     "DeviceRepository",
@@ -25,4 +26,5 @@ __all__ = [
     "DeviceInfoRepository",
     "DeviceFaultRepository",
     "DeviceConsumptionRepository",
+    "APICallLogRepository",
 ]

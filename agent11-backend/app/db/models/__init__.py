@@ -25,6 +25,7 @@ from app.db.models.device_threshold import DeviceThreshold
 from app.db.models.device_fault import DeviceFault
 from app.db.models.device_consumption import DeviceConsumption
 from app.db.models.group_consumption import GroupConsumption
+from app.db.models.api_call_log import APICallLog
 
 __all__ = [
     "Device",
@@ -54,4 +55,5 @@ __all__ = [
     "DeviceFault",
     "DeviceConsumption",
     "GroupConsumption",
+    "APICallLog",
 ]

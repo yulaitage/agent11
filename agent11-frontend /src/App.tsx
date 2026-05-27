@@ -31,7 +31,10 @@ import UsersPage, { UsersSidebar, UsersHeaderExtras } from './components/UsersPa
 import SettingsPopup from './components/SettingsPopup';
 import { Logo } from './components/Logo';
 
-function HomeContent({ showSettingsPopup, setShowSettingsPopup }: { showSettingsPopup: boolean; setShowSettingsPopup: (v: boolean) => void }) {
+function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
+  showSettingsPopup: boolean
+  setShowSettingsPopup: (v: boolean) => void
+}) {
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('Home');
@@ -47,6 +50,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: { showSettings
   const [activeSkill, setActiveSkill] = useState<SkillType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedKnowledgeFile, setSelectedKnowledgeFile] = useState<string | null>(null);
+  const [apiRefOpen, setApiRefOpen] = useState(false);
 
   const navItems = ['Home', 'Modeling', 'Knowledge', 'API', 'Users'];
 
@@ -262,7 +266,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: { showSettings
         ) : activeTab === 'Knowledge' ? (
           <KnowledgeSidebar onSelectFile={(id) => setSelectedKnowledgeFile(id)} />
         ) : activeTab === 'API' ? (
-          <APISidebar />
+          <APISidebar onOpenApiRef={() => setApiRefOpen(true)} />
         ) : activeTab === 'Users' ? (
           <UsersSidebar />
         ) : (
@@ -309,7 +313,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: { showSettings
           <div className="flex items-center gap-4">
             {activeTab === 'Modeling' && <ModelingHeaderExtras isConnected={isDbConnected} />}
             {activeTab === 'Knowledge' && <KnowledgeHeaderExtras />}
-            {activeTab === 'API' && <APIHeaderExtras />}
+            {activeTab === 'API' && <APIHeaderExtras isApiRefOpen={apiRefOpen} onToggleApiRef={() => setApiRefOpen(!apiRefOpen)} />}
             {activeTab === 'Users' && <UsersHeaderExtras />}
             <div className="flex items-center gap-2 text-slate-300 text-sm cursor-pointer hover:text-white transition-colors">
               <span>{user?.userName || 'Guest'}</span>
@@ -459,7 +463,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: { showSettings
                                       const pct = Math.round((v / max) * 100)
                                       const color = colors[idx] || ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#3b82f6', '#ef4444', '#84cc16'][idx % 10]
                                       return (
-                                        <div key={label} className="flex items-center gap-2">
+                                        <div key={idx} className="flex items-center gap-2">
                                           <div className="w-20 truncate text-[10px] text-slate-500">{label}</div>
                                           <div className="flex-1 h-2.5 bg-slate-200 rounded">
                                             <div className="h-2.5 rounded" style={{ width: `${pct}%`, backgroundColor: color }} />
@@ -580,7 +584,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: { showSettings
         ) : activeTab === 'Knowledge' ? (
           <KnowledgePage selectedFile={selectedKnowledgeFile} onClearSelection={() => setSelectedKnowledgeFile(null)} />
         ) : activeTab === 'API' ? (
-          <APIPage />
+          <APIPage isApiRefOpen={apiRefOpen} onToggleApiRef={() => setApiRefOpen(!apiRefOpen)} />
         ) : activeTab === 'Users' ? (
           <UsersPage />
         ) : (

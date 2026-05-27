@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { X, Archive, Moon, Sun, LogOut, ChevronRight, Palette, Settings as SettingsIcon, Database, Plus, Trash2, Edit, Check, Server } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Archive, Palette, Settings as SettingsIcon, Database, Plus, Trash2, Edit, Check, Server, Brain, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { chatApi } from '../api/chat';
+import { llmApi, type LLMConfig } from '../api/llm';
 
 interface SettingsPopupProps {
   opened: boolean;
@@ -25,19 +26,102 @@ interface DatabaseConfig {
   password: string;
 }
 
+const PRESET_PROVIDERS = {
+  'ollama-local': { name: 'Ollama (Local)', provider: 'ollama' as const, base_url: 'http://localhost:11434/v1' },
+  'lmstudio-local': { name: 'LM Studio (Local)', provider: 'lmstudio' as const, base_url: 'http://localhost:1234/v1' },
+  'deepseek': { name: 'DeepSeek', provider: 'deepseek' as const, base_url: 'https://api.deepseek.com/v1' },
+  'zhipu': { name: '智谱 GLM', provider: 'zhipu' as const, base_url: 'https://open.bigmodel.cn/api/paas/v4' },
+  'minimax': { name: 'MiniMax', provider: 'minimax' as const, base_url: 'https://api.minimax.chat/v1' },
+  'custom': { name: 'Custom', provider: 'ollama' as const, base_url: '' },
+}
+
 const SettingsPopup: React.FC<SettingsPopupProps> = ({ opened, onClose }) => {
   const { logout } = useAuth();
   const [showArchived, setShowArchived] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [archivedChats, setArchivedChats] = useState<ArchivedChat[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'general' | 'database'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'database' | 'llm'>('general');
   const [databases, setDatabases] = useState<DatabaseConfig[]>([
     { id: '1', name: 'PostgreSQL Agent11', type: 'postgresql', host: 'localhost', port: '5433', database: 'agent11db', username: 'agent11', password: 'agent11_password' }
   ]);
   const [editingDb, setEditingDb] = useState<DatabaseConfig | null>(null);
   const [isAddingDb, setIsAddingDb] = useState(false);
   const [newDb, setNewDb] = useState<DatabaseConfig>({ id: '', name: '', type: 'postgresql', host: '', port: '', database: '', username: '', password: '' });
+
+  // LLM Settings
+  const [llmConfig, setLlmConfig] = useState<LLMConfig>({
+    provider: 'ollama',
+    base_url: 'http://localhost:11434/v1',
+    model: 'qwen3:latest',
+    temperature: 0.7,
+    timeout: 120,
+    api_key: '',
+  });
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [llmConnected, setLlmConnected] = useState(false);
+  const [llmLoading, setLlmLoading] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState<string>('');
+
+  // Load LLM config on mount
+  useEffect(() => {
+    if (opened) {
+      loadLlmConfig();
+    }
+  }, [opened]);
+
+  const loadLlmConfig = async () => {
+    try {
+      const [config, status, models] = await Promise.all([
+        llmApi.getConfig(),
+        llmApi.getConnectionStatus(),
+        llmApi.getAvailableModels().catch(() => ({ models: [] })),
+      ]);
+      setLlmConfig(config);
+      setLlmConnected(status.connected);
+      setAvailableModels(models.models || []);
+    } catch (e) {
+      console.error('Failed to load LLM config', e);
+    }
+  };
+
+  const handleSaveLlmConfig = async () => {
+    setLlmLoading(true);
+    try {
+      await llmApi.updateConfig(llmConfig);
+      const status = await llmApi.getConnectionStatus();
+      setLlmConnected(status.connected);
+      alert('LLM 配置已保存');
+    } catch (e) {
+      console.error('Failed to save LLM config', e);
+      alert('保存失败');
+    } finally {
+      setLlmLoading(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    try {
+      const result = await llmApi.testConnection(llmConfig);
+      alert(result.message);
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || '连接失败');
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
+  const handlePresetChange = (preset: string) => {
+    setSelectedPreset(preset);
+    if (preset === 'custom') {
+      setLlmConfig({ ...llmConfig, base_url: '' });
+    } else if (preset && PRESET_PROVIDERS[preset as keyof typeof PRESET_PROVIDERS]) {
+      const p = PRESET_PROVIDERS[preset as keyof typeof PRESET_PROVIDERS];
+      setLlmConfig({ ...llmConfig, provider: p.provider, base_url: p.base_url });
+    }
+  };
 
   if (!opened) return null;
 
@@ -115,7 +199,7 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({ opened, onClose }) => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="bg-white rounded-xl shadow-2xl w-[700px] max-h-[85vh] flex flex-col"
+        className="bg-white rounded-xl shadow-2xl w-[750px] max-h-[85vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -154,6 +238,15 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({ opened, onClose }) => {
                 >
                   <Database className="w-4 h-4" />
                   Database
+                </button>
+                <button
+                  onClick={() => setActiveTab('llm')}
+                  className={`w-full flex items-center gap-3 px-3 py-2 text-sm rounded-lg transition-colors ${
+                    activeTab === 'llm' ? 'bg-indigo-100 text-indigo-700 font-medium' : 'text-slate-600 hover:bg-white hover:shadow-sm'
+                  }`}
+                >
+                  <Brain className="w-4 h-4" />
+                  LLM Model
                 </button>
               </div>
             </div>
@@ -235,8 +328,157 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({ opened, onClose }) => {
                     onClick={handleLogout}
                     className="flex items-center gap-3 px-4 py-3 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                   >
-                    <LogOut className="w-5 h-5" />
                     <span className="text-sm font-medium">Log Out</span>
+                  </button>
+                </div>
+              </div>
+            ) : activeTab === 'llm' ? (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-slate-800">Model Configuration</h3>
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${llmConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+                    <span className="text-xs text-slate-500">{llmConnected ? 'Connected' : 'Disconnected'}</span>
+                  </div>
+                </div>
+
+                {/* Preset Provider */}
+                <div>
+                  <label className="block text-xs text-slate-500 mb-2">Quick Presets</label>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(PRESET_PROVIDERS).map(([key, preset]) => (
+                      <button
+                        key={key}
+                        onClick={() => handlePresetChange(key)}
+                        className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+                          selectedPreset === key
+                            ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                            : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {preset.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Provider */}
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Provider</label>
+                  <select
+                    value={llmConfig.provider}
+                    onChange={e => setLlmConfig({ ...llmConfig, provider: e.target.value as 'ollama' | 'lmstudio' | 'deepseek' | 'zhipu' | 'minimax' })}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="ollama">Ollama (本地)</option>
+                    <option value="lmstudio">LM Studio (本地)</option>
+                    <option value="deepseek">DeepSeek (云服务)</option>
+                    <option value="zhipu">智谱 GLM (云服务)</option>
+                    <option value="minimax">MiniMax (云服务)</option>
+                  </select>
+                </div>
+
+                {/* Base URL */}
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Base URL</label>
+                  <input
+                    type="text"
+                    value={llmConfig.base_url}
+                    onChange={e => setLlmConfig({ ...llmConfig, base_url: e.target.value })}
+                    placeholder="http://localhost:11434"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                {/* Model */}
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Model Name</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={llmConfig.model}
+                      onChange={e => setLlmConfig({ ...llmConfig, model: e.target.value })}
+                      placeholder="qwen3:latest"
+                      list="available-models"
+                      className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <button
+                      onClick={loadLlmConfig}
+                      className="px-3 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50"
+                      title="Refresh models"
+                    >
+                      <Loader2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <datalist id="available-models">
+                    {availableModels.map(m => <option key={m} value={m} />)}
+                  </datalist>
+                  {availableModels.length > 0 && (
+                    <p className="mt-1 text-xs text-slate-400">
+                      Available: {availableModels.slice(0, 5).join(', ')}
+                      {availableModels.length > 5 && ` +${availableModels.length - 5} more`}
+                    </p>
+                  )}
+                </div>
+
+                {/* Temperature */}
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Temperature: {llmConfig.temperature}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={llmConfig.temperature}
+                    onChange={e => setLlmConfig({ ...llmConfig, temperature: parseFloat(e.target.value) })}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-slate-400 mt-1">
+                    <span>Precise</span>
+                    <span>Creative</span>
+                  </div>
+                </div>
+
+                {/* Timeout */}
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Timeout (seconds)</label>
+                  <input
+                    type="number"
+                    value={llmConfig.timeout}
+                    onChange={e => setLlmConfig({ ...llmConfig, timeout: parseInt(e.target.value) || 120 })}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                {/* API Key */}
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">API Key (for cloud providers)</label>
+                  <input
+                    type="password"
+                    value={llmConfig.api_key || ''}
+                    onChange={e => setLlmConfig({ ...llmConfig, api_key: e.target.value })}
+                    placeholder="sk-..."
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3 pt-4">
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={testingConnection}
+                    className="flex items-center gap-2 px-4 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
+                  >
+                    {testingConnection && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Test Connection
+                  </button>
+                  <button
+                    onClick={handleSaveLlmConfig}
+                    disabled={llmLoading}
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                  >
+                    {llmLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Save Configuration
                   </button>
                 </div>
               </div>

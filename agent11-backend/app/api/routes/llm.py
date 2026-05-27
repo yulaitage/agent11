@@ -7,11 +7,12 @@ router = APIRouter()
 
 
 class LLMConfig(BaseModel):
-    provider: Literal["ollama", "lmstudio"]
+    provider: Literal["ollama", "lmstudio", "deepseek", "zhipu", "minimax"]
     base_url: str
     model: str
     temperature: float = 0.7
     timeout: int = 120
+    api_key: str = ""
 
 
 @router.get("/config")

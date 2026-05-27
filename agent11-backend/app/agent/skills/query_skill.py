@@ -279,7 +279,7 @@ class QuerySkill(BaseSkill):
         """在所有文本列中搜索关键词，返回每个匹配的表和列"""
         results = {}
         # 只搜索可能包含故障/事件数据的表
-        priority_tables = ['devices_fault', 'import_postgres_export', 'fault_records', 'events']
+        priority_tables = ['devices_fault', 'fault_records', 'events']
         async for session in get_session():
             for table_name, info in schema["tables"].items():
                 # 跳过非优先级表（除非关键词很少）
