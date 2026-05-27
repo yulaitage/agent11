@@ -44,9 +44,11 @@ const NewViewDialog: React.FC<NewViewDialogProps> = ({ tables, onClose, onCreate
     if (!name || !sourceTable || selectedColumns.length === 0) return;
     setSaving(true);
     try {
+      // Escape single quotes to prevent SQL injection
+      const escapedFilterValue = filterValue.replace(/'/g, "''");
       let definition = `SELECT ${selectedColumns.join(', ')} FROM "${sourceTable}"`;
       if (filterColumn && filterValue) {
-        definition += ` WHERE "${filterColumn}" = '${filterValue}'`;
+        definition += ` WHERE "${filterColumn}" = '${escapedFilterValue}'`;
       }
       await modelsApi.createView(name, definition);
       onCreated();

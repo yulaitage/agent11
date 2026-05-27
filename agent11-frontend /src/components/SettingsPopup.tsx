@@ -43,7 +43,7 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({ opened, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'general' | 'database' | 'llm'>('general');
   const [databases, setDatabases] = useState<DatabaseConfig[]>([
-    { id: '1', name: 'PostgreSQL Agent11', type: 'postgresql', host: 'localhost', port: '5433', database: 'agent11db', username: 'agent11', password: 'agent11_password' }
+    { id: '1', name: 'PostgreSQL Agent11', type: 'postgresql', host: 'localhost', port: '5433', database: 'agent11db', username: 'agent11', password: '' }
   ]);
   const [editingDb, setEditingDb] = useState<DatabaseConfig | null>(null);
   const [isAddingDb, setIsAddingDb] = useState(false);

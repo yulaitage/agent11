@@ -91,6 +91,22 @@ class ChatRepository:
             return True
 
     @classmethod
+    async def update_title(cls, chat_id: str, title: str) -> bool:
+        """Update a chat's title"""
+        async for session in get_session():
+            result = await session.execute(
+                select(Chat).where(Chat.id == chat_id)
+            )
+            chat = result.scalar_one_or_none()
+            if not chat:
+                return False
+
+            chat.chat_title = title
+            chat.updated_at = datetime.utcnow()
+            await session.commit()
+            return True
+
+    @classmethod
     async def add_message(cls, chat_id: str, message: dict) -> Optional[dict]:
         """Add a message to a chat"""
         async for session in get_session():

@@ -85,6 +85,21 @@ async def delete_chat(chat_id: str):
     return {"success": True}
 
 
+class UpdateChatTitleRequest(BaseModel):
+    title: str
+
+
+@router.put("/{chat_id}")
+async def update_chat_title(chat_id: str, request: UpdateChatTitleRequest):
+    """更新聊天标题"""
+    success = await ChatRepository.update_title(chat_id, request.title)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    return {"success": True}
+
+
 @router.post("/{chat_id}/messages")
 async def send_message(chat_id: str, request: SendMessageRequest, user_id: str = "default"):
     """发送消息并获取 AI 响应"""

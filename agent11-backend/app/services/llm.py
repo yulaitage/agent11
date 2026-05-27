@@ -162,9 +162,46 @@ class LLMService:
                             continue
 
     async def update_config(self, updates: dict):
-        """更新配置"""
+        """更新配置并持久化到 .env 文件"""
         self._config.update(updates)
+        self._persist_to_env(updates)
         logger.info("llm_config_updated", updates=updates)
+
+    def _persist_to_env(self, updates: dict):
+        """将 LLM 配置写回 .env 文件"""
+        env_map = {
+            "provider": "LLM_PROVIDER",
+            "base_url": "LLM_BASE_URL",
+            "model": "LLM_MODEL",
+            "temperature": "LLM_TEMPERATURE",
+            "timeout": "LLM_TIMEOUT",
+            "api_key": "LLM_API_KEY",
+        }
+
+        env_path = self.settings.model_config.get("env_file", ".env")
+        if not env_path:
+            return
+
+        try:
+            with open(env_path, "r") as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            lines = []
+
+        updated_lines = []
+        for line in lines:
+            stripped = line.strip()
+            matched = False
+            for config_key, env_key in env_map.items():
+                if config_key in updates and stripped.startswith(f"{env_key}="):
+                    updated_lines.append(f'{env_key}="{updates[config_key]}"\n')
+                    matched = True
+                    break
+            if not matched:
+                updated_lines.append(line)
+
+        with open(env_path, "w") as f:
+            f.writelines(updated_lines)
 
     async def switch_provider(self, provider: Literal["ollama", "lmstudio"]) -> bool:
         """切换到备用 provider"""

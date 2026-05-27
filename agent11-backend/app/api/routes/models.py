@@ -161,6 +161,19 @@ async def delete_table_rows(table_name: str):
 @router.post("/views")
 async def create_view(name: str, definition: str):
     """Create a new view."""
+    # Validate definition to prevent SQL injection
+    definition_upper = definition.upper().strip()
+    if not definition_upper.startswith("SELECT"):
+        raise HTTPException(status_code=400, detail="View definition must be a SELECT statement")
+    if ";" in definition:
+        raise HTTPException(status_code=400, detail="View definition cannot contain multiple statements")
+    # Dangerous SQL keywords that shouldn't be in a view definition
+    dangerous_keywords = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "TRUNCATE", "EXEC", "EXECUTE"]
+    for keyword in dangerous_keywords:
+        if keyword in definition_upper.split("FROM")[0] if "FROM" in definition_upper else definition_upper:
+            if keyword in definition_upper:
+                raise HTTPException(status_code=400, detail=f"View definition contains forbidden keyword: {keyword}")
+
     async for session in get_session():
         await session.execute(
             text(f'CREATE OR REPLACE VIEW "{name}" AS {definition}')
