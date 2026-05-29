@@ -148,8 +148,24 @@ class FaultQuerySkill(BaseSkill):
             ("执行查询", f"找到 {len(results)} 条故障记录", "查询完成")
         ]))
 
-        # 生成回答
-        answer = self._generate_answer(query, results, filters)
+        # 当查询为空且有分组筛选时，去掉分组条件重新查询，找出哪些分组有数据
+        if not results and filters.get("group"):
+            alt_filters = {k: v for k, v in filters.items() if k not in ("group", "group_path")}
+            if alt_filters:
+                alt_sql, alt_params = self._build_sql_query(alt_filters)
+                alt_results = await self._execute_fault_query(alt_sql, alt_params)
+            else:
+                alt_sql = """
+                    SELECT DISTINCT "businessGroupId", "businessGroupName", "businessGroupIdPath"
+                    FROM devices_fault
+                    ORDER BY "businessGroupId"
+                """
+                alt_results = await self._execute_fault_query(alt_sql, [])
+            # 用 LLM 生成回答
+            answer = await self._generate_no_results_llm_answer(query, filters, alt_results, llm)
+        else:
+            # 生成回答
+            answer = self._generate_answer(query, results, filters)
 
         # 生成表格数据
         data = self._generate_table_data(results)
@@ -325,15 +341,6 @@ class FaultQuerySkill(BaseSkill):
     def _generate_answer(self, query: str, results: list, filters: dict) -> str:
         """生成自然语言回答"""
         if not results:
-            # 当没有结果时，给出更有帮助的提示
-            if filters.get("group"):
-                msg = f"分组{filters['group']}未找到匹配的故障记录。"
-                msg += "\n\n当前系统仅包含以下分组的数据："
-                # 列出系统中实际存在的分组
-                msg += "\n- 分组9"
-                msg += "\n- 分组10"
-                msg += "\n\n建议您查询以上分组（如：2026年4月分组9有哪些故障？）"
-                return msg
             return "未找到匹配的故障记录。"
 
         count = len(results)
@@ -379,6 +386,54 @@ class FaultQuerySkill(BaseSkill):
             lines.append(f"\n... 还有 {count - 5} 条记录")
 
         return "\n".join(lines)
+
+    async def _generate_no_results_llm_answer(
+        self,
+        query: str,
+        filters: dict,
+        alt_results: list[dict],
+        llm: Any
+    ) -> str:
+        """当无匹配结果时，使用 LLM 生成分析回答"""
+        # 收集存在的分组信息
+        groups = {}
+        for r in alt_results:
+            gid = r.get("businessGroupId", "")
+            gname = r.get("businessGroupName", "")
+            if gid:
+                groups[gid] = gname or f"分组{gid}"
+            # 也尝试从 businessGroupIdPath 提取
+            path = r.get("businessGroupIdPath", "")
+            if not gid and path:
+                parts = path.split("/")
+                gid = parts[-1]
+                groups[gid] = f"分组{gid}"
+
+        group_list = ", ".join(groups.values()) if groups else "未知"
+        fault_type = filters.get("fault_type_cn", "相关")
+
+        prompt = f"""用户查询: {query}
+查询条件: {fault_type}
+结果: 在指定分组({filters.get('group', '?')})未找到匹配记录
+
+系统实际包含以下分组的数据: {group_list}
+
+请用中文、自然语言回答用户，说明:
+1. 用户查询的{fault_type}在分组{filters.get('group', '?')}没有记录
+2. 该{fault_type}仅存在于以下分组: {group_list}
+3. 建议用户查询这些分组
+
+回答要简洁、友好。"""
+
+        try:
+            response = llm.invoke(prompt, system=False, temperature=0.3)
+            # 清理 thinking 标签
+            import re
+            cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+            return cleaned if cleaned else f"未在分组{filters.get('group', '')}找到{fault_type}记录。该{fault_type}仅存在于{group_list}。"
+        except Exception as e:
+            logger.warning("llm_no_results_answer_failed", error=str(e))
+            return f"未在分组{filters.get('group', '')}找到{fault_type}记录。该{fault_type}仅存在于{group_list}。"
 
     def _generate_table_data(self, results: list) -> dict:
         """生成表格数据"""
