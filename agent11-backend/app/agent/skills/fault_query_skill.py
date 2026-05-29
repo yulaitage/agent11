@@ -325,6 +325,15 @@ class FaultQuerySkill(BaseSkill):
     def _generate_answer(self, query: str, results: list, filters: dict) -> str:
         """生成自然语言回答"""
         if not results:
+            # 当没有结果时，给出更有帮助的提示
+            if filters.get("group"):
+                msg = f"分组{filters['group']}未找到匹配的故障记录。"
+                msg += "\n\n当前系统仅包含以下分组的数据："
+                # 列出系统中实际存在的分组
+                msg += "\n- 分组9"
+                msg += "\n- 分组10"
+                msg += "\n\n建议您查询以上分组（如：2026年4月分组9有哪些故障？）"
+                return msg
             return "未找到匹配的故障记录。"
 
         count = len(results)
@@ -346,7 +355,14 @@ class FaultQuerySkill(BaseSkill):
 
         base = "".join(parts) if parts else "相关"
 
-        lines = [f"找到 {count} 条{base}故障记录：\n"]
+        # 避免 "电表故障故障记录" 这种重复
+        if filters.get("fault_type_cn"):
+            if base.endswith("故障"):
+                lines = [f"找到 {count} 条{base}记录：\n"]
+            else:
+                lines = [f"找到 {count} 条{base}故障记录：\n"]
+        else:
+            lines = [f"找到 {count} 条{base}故障记录：\n"]
 
         # 显示前几条记录
         for r in results[:5]:
