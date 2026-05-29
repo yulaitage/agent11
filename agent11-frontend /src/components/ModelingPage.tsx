@@ -274,7 +274,14 @@ export const ModelingSidebar: React.FC<ModelingSidebarProps> = ({ onConnect }) =
     onConnect();
   };
 
-  const tableCount = databases.reduce((acc, db) => acc + db.tables.length, 0);
+  const tableCount = databases.reduce((acc, db) => {
+    const visible = db.tables.filter(tbl =>
+      !tbl.name.startsWith('memory_') &&
+      !tbl.name.startsWith('metrics_') &&
+      !['skill_definitions', 'skill_health', 'alembic_version', 'chats', 'users', 'api_call_logs', 'api_logs', 'llm_configs'].includes(tbl.name)
+    );
+    return acc + visible.length;
+  }, 0);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
