@@ -20,7 +20,7 @@ import { motion } from 'motion/react';
 import { useAuth } from './context/AuthContext';
 import { chatApi, type ChatListItem, SkillType, Message } from './api/chat';
 import { exportChatToPdf, exportTableToPdf } from './utils/exportPdf';
-import { exportChatToExcel, exportTableToExcel } from './utils/exportExcel';
+import { exportTableToExcel } from './utils/exportExcel';
 import FileUpload from './components/FileUpload';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
@@ -224,13 +224,6 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
       } catch (e) {
         console.error('PDF export failed', e);
       }
-    }
-  };
-
-  const handleExportExcel = () => {
-    if (messages.length > 0) {
-      const chatTitle = chats.find(c => c.id === currentChatId)?.title || 'Chat';
-      exportChatToExcel(chatTitle, messages);
     }
   };
 
@@ -465,13 +458,6 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
                     >
                       <Download className="w-4 h-4" />
                       PDF
-                    </button>
-                    <button
-                      onClick={handleExportExcel}
-                      className="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition"
-                    >
-                      <Download className="w-4 h-4" />
-                      Excel
                     </button>
                   </div>
                 )}
