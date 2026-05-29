@@ -6,7 +6,6 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import {
-  Plus,
   MessageSquare,
   Settings,
   LogOut,
@@ -49,6 +48,9 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   const [isLoadingChat, setIsLoadingChat] = useState(false);
   const [activeSkill, setActiveSkill] = useState<SkillType | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingChatId, setEditingChatId] = useState<string | null>(null);
+  const [editChatTitle, setEditChatTitle] = useState('');
+  const editInputRef = useRef<HTMLInputElement>(null);
   const [selectedKnowledgeFile, setSelectedKnowledgeFile] = useState<string | null>(null);
   const [apiRefOpen, setApiRefOpen] = useState(false);
 
@@ -268,9 +270,6 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
               >
                 <div className="flex items-center justify-between px-2">
                   <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Recent Chats</span>
-                  <button className="p-1 hover:bg-white rounded-md transition-colors">
-                    <Plus className="w-3 h-3 text-slate-500" />
-                  </button>
                 </div>
 
                 <div className="space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent hover:scrollbar-thumb-slate-400">
@@ -306,7 +305,38 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
                         ) : (
                           <MessageSquare className="w-4 h-4 text-slate-400 shrink-0" />
                         )}
-                        <span className="text-sm text-slate-600 truncate">{chat.title}</span>
+                        {editingChatId === chat.id ? (
+                          <input
+                            ref={editInputRef}
+                            type="text"
+                            value={editChatTitle}
+                            onChange={e => setEditChatTitle(e.target.value)}
+                            onBlur={() => {
+                              if (editChatTitle.trim() && editChatTitle !== chat.title) {
+                                chatApi.updateChatTitle(chat.id, editChatTitle.trim()).then(() => loadChats());
+                              }
+                              setEditingChatId(null);
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                              if (e.key === 'Escape') setEditingChatId(null);
+                            }}
+                            className="w-full text-sm text-slate-700 bg-white border border-indigo-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                            autoFocus
+                          />
+                        ) : (
+                          <span
+                            className="text-sm text-slate-600 truncate flex-1"
+                            onDoubleClick={() => {
+                              setEditingChatId(chat.id);
+                              setEditChatTitle(chat.title);
+                              setTimeout(() => editInputRef.current?.select(), 50);
+                            }}
+                            title="双击修改名称"
+                          >
+                            {chat.title}
+                          </span>
+                        )}
                       </div>
                       <button
                         onClick={(e) => {
