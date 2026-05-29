@@ -19,8 +19,8 @@ import {
 import { motion } from 'motion/react';
 import { useAuth } from './context/AuthContext';
 import { chatApi, type ChatListItem, SkillType, Message } from './api/chat';
-import { exportChatToPdf } from './utils/exportPdf';
-import { exportChatToExcel } from './utils/exportExcel';
+import { exportChatToPdf, exportTableToPdf } from './utils/exportPdf';
+import { exportChatToExcel, exportTableToExcel } from './utils/exportExcel';
 import FileUpload from './components/FileUpload';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
@@ -512,6 +512,31 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
                                     ))}
                                   </tbody>
                                 </table>
+                              </div>
+                            )
+                          })()
+                        )}
+
+                        {/* Export buttons for table data */}
+                        {msg.role !== 'user' && msg.data && (
+                          (() => {
+                            const table = (msg.data as any).table ?? msg.data
+                            if (!table?.headers?.length || !table?.rows?.length) return null
+                            const exportTitle = msg.skill ? `agent11_${msg.skill}` : 'agent11_export'
+                            return (
+                              <div className="mt-2 flex gap-2">
+                                <button
+                                  onClick={() => exportTableToExcel(exportTitle, table.headers, table.rows)}
+                                  className="px-2 py-1 text-[10px] font-medium text-green-600 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors"
+                                >
+                                  Excel
+                                </button>
+                                <button
+                                  onClick={() => exportTableToPdf(exportTitle, table.headers, table.rows)}
+                                  className="px-2 py-1 text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded hover:bg-red-100 transition-colors"
+                                >
+                                  PDF
+                                </button>
                               </div>
                             )
                           })()
