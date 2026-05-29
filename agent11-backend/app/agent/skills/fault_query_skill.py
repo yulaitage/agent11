@@ -87,18 +87,60 @@ class FaultQuerySkill(BaseSkill):
         "lux_module_fault": "光照模块故障",
     }
 
-    # 分组信息映射：分组号 → businessGroupId 值
-    # 父子关系：分组1(0001) 下有 分组9(0009) 和 分组10(0010)
-    # 分组2(0002) 下有 分组11(0011)
-    # 父组使用 businessGroupIdPath LIKE 前缀匹配包含子组
-    GROUP_ID_MAP = {
-        "1": "0001", "2": "0002", "3": "0003", "4": "0004", "5": "0005",
-        "6": "0006", "7": "0007", "8": "0008", "9": "0009", "10": "0010", "11": "0011",
-        "分组1": "0001", "分组2": "0002", "分组3": "0003", "分组4": "0004", "分组5": "0005",
-        "分组6": "0006", "分组7": "0007", "分组8": "0008", "分组9": "0009", "分组10": "0010", "分组11": "0011",
-    }
-    # 父组列表（有子组的分组，查询时需用 LIKE 前缀匹配包含子组）
-    PARENT_GROUP_IDS = {"0001", "0002"}
+    # 缓存动态加载的分组信息（按聊天会话惰性加载）
+    _group_info_cache: dict | None = None
+
+    async def _ensure_group_info(self) -> dict:
+        """从 groups_info 表动态加载分组层级关系"""
+        if self._group_info_cache is not None:
+            return self._group_info_cache
+
+        cache = {
+            "id_by_num": {},       # "分组1" → "0001", "1" → "0001"
+            "name_by_id": {},      # "0001" → "分组1"
+            "parent_ids": set(),   # {"0001", "0002"}（有子组的分组）
+            "path_by_id": {},      # "0001" → "0000/0001"（用于 LIKE 前缀）
+        }
+
+        try:
+            rows = await Database.fetch('SELECT * FROM groups_info ORDER BY "businessGroupId"')
+            child_ids = set()
+
+            for r in rows:
+                gid = r["businessGroupId"]
+                gname = r["businessGroupName"]
+                path = r["businessGroupIdPath"]
+                parent = r["parentGroupId"]
+
+                cache["name_by_id"][gid] = gname
+                cache["path_by_id"][gid] = path
+
+                # 从分组名提取数字（如 "分组1" → "1"）
+                import re
+                m = re.search(r'(\d+)', gname)
+                if m:
+                    num = m.group(1)
+                    cache["id_by_num"][f"分组{num}"] = gid
+                    cache["id_by_num"][num] = gid
+
+                # 记录有子组的分组
+                if parent:
+                    child_ids.add(gid)
+                    cache["parent_ids"].add(parent)
+
+            logger.info("group_info_loaded",
+                        groups=len(rows),
+                        parents=len(cache["parent_ids"]),
+                        children=len(child_ids))
+
+            self._group_info_cache = cache
+
+        except Exception as e:
+            logger.error("group_info_load_failed", error=str(e))
+            # 缓存空数据，避免重复查询失败
+            self._group_info_cache = cache
+
+        return self._group_info_cache
 
     async def execute(
         self,
@@ -109,12 +151,15 @@ class FaultQuerySkill(BaseSkill):
         """执行故障查询"""
         reasoning_chain = []
 
+        # 动态加载分组层级信息
+        group_info = await self._ensure_group_info()
+
         reasoning_chain.extend(await self._build_reasoning_chain([
             ("解析查询意图", f"用户查询: {query}", "意图识别为故障查询")
         ]))
 
-        # 解析查询条件
-        filters = self._parse_fault_query(query)
+        # 解析查询条件（使用动态分组信息）
+        filters = self._parse_fault_query(query, group_info)
 
         reasoning_chain.extend(await self._build_reasoning_chain([
             ("提取查询条件",
@@ -167,21 +212,24 @@ class FaultQuerySkill(BaseSkill):
             "sources": []
         }
 
-    def _parse_fault_query(self, query: str) -> dict:
+    def _parse_fault_query(self, query: str, group_info: dict) -> dict:
         """解析故障查询条件"""
         filters = {}
+        id_by_num = group_info.get("id_by_num", {})
+        parent_ids = group_info.get("parent_ids", set())
+        path_by_id = group_info.get("path_by_id", {})
 
         # 提取分组信息
         group_match = re.search(r'分组(\d+)', query)
         if group_match:
             group_num = group_match.group(1)
             filters["group"] = group_num
-            group_id = self.GROUP_ID_MAP.get(f"分组{group_num}")
+            group_id = id_by_num.get(f"分组{group_num}") or id_by_num.get(group_num)
             if group_id:
-                if group_id in self.PARENT_GROUP_IDS:
-                    # 父组：用 businessGroupIdPath LIKE 前缀匹配，自动包含子组
-                    # 例：分组1(0001) 的 path 前缀 0000/0001 匹配子组 0009,0010
-                    filters["group_path"] = f"0000/{group_id}"
+                if group_id in parent_ids:
+                    # 父组：用 businessGroupIdPath LIKE 前缀匹配（包含子组）
+                    path = path_by_id.get(group_id, f"0000/{group_id}")
+                    filters["group_path"] = path
                 else:
                     # 叶子组：用 businessGroupId 精确匹配
                     filters["group_id"] = group_id
@@ -192,10 +240,11 @@ class FaultQuerySkill(BaseSkill):
             if group_match:
                 group_num = group_match.group(1)
                 filters["group"] = group_num
-                group_id = self.GROUP_ID_MAP.get(group_num)
+                group_id = id_by_num.get(group_num)
                 if group_id:
-                    if group_id in self.PARENT_GROUP_IDS:
-                        filters["group_path"] = f"0000/{group_id}"
+                    if group_id in parent_ids:
+                        path = path_by_id.get(group_id, f"0000/{group_id}")
+                        filters["group_path"] = path
                     else:
                         filters["group_id"] = group_id
 
