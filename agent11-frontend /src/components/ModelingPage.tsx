@@ -656,7 +656,7 @@ const ModelingPage: React.FC = () => {
         .filter(tbl =>
             !tbl.name.startsWith('memory_') &&
             !tbl.name.startsWith('metrics_') &&
-            !['skill_definitions', 'skill_health', 'alembic_version', 'chats', 'users'].includes(tbl.name)
+            !['skill_definitions', 'skill_health', 'alembic_version', 'chats', 'users', 'api_call_logs', 'api_logs'].includes(tbl.name)
           )
         .map((tbl, i) => {
         const col = i % COLUMNS;
