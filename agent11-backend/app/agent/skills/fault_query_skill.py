@@ -87,30 +87,18 @@ class FaultQuerySkill(BaseSkill):
         "lux_module_fault": "光照模块故障",
     }
 
-    # 分组信息映射：分组号 → businessGroupIdPath 前缀（完整路径）
-    # 实际数据只有分组9和10，路径格式为 0000/0001/0009 和 0000/0001/00010
-    GROUP_PATH_MAP = {
-        "1": "0000/0001/0001",
-        "2": "0000/0002/0002",
-        "3": "0000/0003/0003",
-        "4": "0000/0004/0004",
-        "5": "0000/0005/0005",
-        "6": "0000/0006/0006",
-        "7": "0000/0007/0007",
-        "8": "0000/0008/0008",
-        "9": "0000/0001/0009",
-        "10": "0000/0001/00010",
-        "分组1": "0000/0001/0001",
-        "分组2": "0000/0002/0002",
-        "分组3": "0000/0003/0003",
-        "分组4": "0000/0004/0004",
-        "分组5": "0000/0005/0005",
-        "分组6": "0000/0006/0006",
-        "分组7": "0000/0007/0007",
-        "分组8": "0000/0008/0008",
-        "分组9": "0000/0001/0009",
-        "分组10": "0000/0001/00010",
+    # 分组信息映射：分组号 → businessGroupId 值
+    # 父子关系：分组1(0001) 下有 分组9(0009) 和 分组10(0010)
+    # 分组2(0002) 下有 分组11(0011)
+    # 父组使用 businessGroupIdPath LIKE 前缀匹配包含子组
+    GROUP_ID_MAP = {
+        "1": "0001", "2": "0002", "3": "0003", "4": "0004", "5": "0005",
+        "6": "0006", "7": "0007", "8": "0008", "9": "0009", "10": "0010", "11": "0011",
+        "分组1": "0001", "分组2": "0002", "分组3": "0003", "分组4": "0004", "分组5": "0005",
+        "分组6": "0006", "分组7": "0007", "分组8": "0008", "分组9": "0009", "分组10": "0010", "分组11": "0011",
     }
+    # 父组列表（有子组的分组，查询时需用 LIKE 前缀匹配包含子组）
+    PARENT_GROUP_IDS = {"0001", "0002"}
 
     async def execute(
         self,
@@ -149,8 +137,8 @@ class FaultQuerySkill(BaseSkill):
         ]))
 
         # 当查询为空且有分组筛选时，去掉分组条件重新查询，找出哪些分组有数据
-        if not results and filters.get("group"):
-            alt_filters = {k: v for k, v in filters.items() if k not in ("group", "group_path")}
+        if not results and (filters.get("group") or filters.get("group_id")):
+            alt_filters = {k: v for k, v in filters.items() if k not in ("group", "group_path", "group_id")}
             if alt_filters:
                 alt_sql, alt_params = self._build_sql_query(alt_filters)
                 alt_results = await self._execute_fault_query(alt_sql, alt_params)
@@ -188,8 +176,15 @@ class FaultQuerySkill(BaseSkill):
         if group_match:
             group_num = group_match.group(1)
             filters["group"] = group_num
-            # 直接从 GROUP_PATH_MAP 获取完整路径
-            filters["group_path"] = self.GROUP_PATH_MAP.get(f"分组{group_num}", f"0000/0001/{group_num.zfill(4)}")
+            group_id = self.GROUP_ID_MAP.get(f"分组{group_num}")
+            if group_id:
+                if group_id in self.PARENT_GROUP_IDS:
+                    # 父组：用 businessGroupIdPath LIKE 前缀匹配，自动包含子组
+                    # 例：分组1(0001) 的 path 前缀 0000/0001 匹配子组 0009,0010
+                    filters["group_path"] = f"0000/{group_id}"
+                else:
+                    # 叶子组：用 businessGroupId 精确匹配
+                    filters["group_id"] = group_id
 
         # 也支持 "组1" 格式
         if "group" not in filters:
@@ -197,7 +192,12 @@ class FaultQuerySkill(BaseSkill):
             if group_match:
                 group_num = group_match.group(1)
                 filters["group"] = group_num
-                filters["group_path"] = self.GROUP_PATH_MAP.get(group_num, f"0000/0001/{group_num.zfill(4)}")
+                group_id = self.GROUP_ID_MAP.get(group_num)
+                if group_id:
+                    if group_id in self.PARENT_GROUP_IDS:
+                        filters["group_path"] = f"0000/{group_id}"
+                    else:
+                        filters["group_id"] = group_id
 
         # 提取故障类型
         fault_type = None
@@ -278,17 +278,15 @@ class FaultQuerySkill(BaseSkill):
 
         # 分组条件
         if filters.get("group_path"):
+            # 父组：用 businessGroupIdPath LIKE 前缀匹配（包含子组）
             param_idx = len(params) + 1
-            group_path = filters["group_path"]
-            # 使用完整路径匹配（不使用 LIKE 前缀匹配，因为路径是固定的）
-            if group_path.startswith("%"):
-                # 特殊格式（如 %00010%）直接使用
-                conditions.append(f'"businessGroupIdPath" LIKE ${param_idx}')
-                params.append(group_path)
-            else:
-                # 完整路径使用等号匹配
-                conditions.append(f'"businessGroupIdPath" = ${param_idx}')
-                params.append(group_path)
+            conditions.append(f'"businessGroupIdPath" LIKE ${param_idx}')
+            params.append(filters["group_path"] + "%")
+        elif filters.get("group_id"):
+            # 叶子组：用 businessGroupId 精确匹配（避免路径格式不一致导致问题）
+            param_idx = len(params) + 1
+            conditions.append(f'"businessGroupId" = ${param_idx}')
+            params.append(filters["group_id"])
 
         # 日期条件 - 使用 TO_DATE 函数进行日期比较
         if filters.get("start_date") and filters.get("end_date"):
