@@ -216,10 +216,14 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
     }
   };
 
-  const handleExportPdf = () => {
+  const handleExportPdf = async () => {
     if (messages.length > 0) {
       const chatTitle = chats.find(c => c.id === currentChatId)?.title || 'Chat';
-      exportChatToPdf(chatTitle, messages);
+      try {
+        await exportChatToPdf(chatTitle, messages);
+      } catch (e) {
+        console.error('PDF export failed', e);
+      }
     }
   };
 
@@ -532,7 +536,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
                                   Excel
                                 </button>
                                 <button
-                                  onClick={() => exportTableToPdf(exportTitle, table.headers, table.rows)}
+                                  onClick={async () => { try { await exportTableToPdf(exportTitle, table.headers, table.rows); } catch (e) { console.error('PDF export failed', e); } }}
                                   className="px-2 py-1 text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded hover:bg-red-100 transition-colors"
                                 >
                                   PDF

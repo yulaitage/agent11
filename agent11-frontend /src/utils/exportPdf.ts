@@ -1,5 +1,4 @@
 import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
 import html2canvas from 'html2canvas'
 
 interface Message {
@@ -8,42 +7,62 @@ interface Message {
   timestamp: string
 }
 
-export function exportChatToPdf(chatTitle: string, messages: Message[]) {
-  const doc = new jsPDF()
+/** 将聊天记录渲染为 HTML 后截图生成 PDF（解决中文乱码） */
+export async function exportChatToPdf(chatTitle: string, messages: Message[]) {
+  const container = document.createElement('div')
+  container.style.position = 'fixed'
+  container.style.left = '-9999px'
+  container.style.top = '0'
+  container.style.background = '#fff'
+  container.style.fontFamily = 'sans-serif'
+  container.style.fontSize = '14px'
+  container.innerHTML = `
+    <div style="padding: 20px; max-width: 800px;">
+      <h1 style="font-size: 22px; color: #333; margin: 0 0 5px;">${escapeHtml(chatTitle)}</h1>
+      <p style="font-size: 11px; color: #999; margin: 0 0 20px;">导出时间: ${new Date().toLocaleString()}</p>
+      <hr style="border: none; border-top: 1px solid #ddd; margin-bottom: 20px;">
+      ${messages.map(msg => `
+        <div style="margin-bottom: 16px;">
+          <div style="font-size: 11px; color: ${msg.role === 'user' ? '#4f46e5' : msg.role === 'assistant' ? '#059669' : '#888'}; font-weight: 600; margin-bottom: 4px;">
+            ${msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'Agent' : 'System'}
+            <span style="font-weight: 400; color: #aaa; margin-left: 8px;">${new Date(msg.timestamp).toLocaleString()}</span>
+          </div>
+          <div style="font-size: 13px; color: #333; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(msg.content)}</div>
+        </div>
+      `).join('')}
+    </div>
+  `
+  document.body.appendChild(container)
 
-  // Title
-  doc.setFontSize(20)
-  doc.text(chatTitle, 14, 22)
+  try {
+    const canvas = await html2canvas(container, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+    })
 
-  // Date
-  doc.setFontSize(10)
-  doc.setTextColor(128)
-  doc.text(`Exported on ${new Date().toLocaleString()}`, 14, 30)
+    const imgData = canvas.toDataURL('image/png')
+    const imgWidth = 190
+    const imgHeight = (canvas.height * imgWidth) / canvas.width
 
-  // Messages
-  const tableData = messages.map((msg) => [
-    msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'Agent' : 'System',
-    msg.content.substring(0, 100) + (msg.content.length > 100 ? '...' : ''),
-    new Date(msg.timestamp).toLocaleString(),
-  ])
+    const doc = new jsPDF('p', 'mm', 'a4')
+    let heightLeft = imgHeight
+    let position = 10
 
-  autoTable(doc, {
-    head: [['Role', 'Message', 'Time']],
-    body: tableData,
-    startY: 40,
-    styles: {
-      fontSize: 8,
-      cellPadding: 4,
-    },
-    headStyles: {
-      fillColor: [75, 85, 99],
-    },
-    alternateRowStyles: {
-      fillColor: [245, 245, 245],
-    },
-  })
+    doc.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight)
+    heightLeft -= doc.internal.pageSize.getHeight() - 20
 
-  doc.save(`${chatTitle.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`)
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight + 10
+      doc.addPage()
+      doc.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight)
+      heightLeft -= doc.internal.pageSize.getHeight() - 20
+    }
+
+    doc.save(`${chatTitle.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`)
+  } finally {
+    document.body.removeChild(container)
+  }
 }
 
 /** 将表格渲染为 HTML 后再截图生成 PDF，解决中文乱码问题 */
