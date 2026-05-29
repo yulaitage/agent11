@@ -111,6 +111,61 @@ export const chatApi = {
     return response.data
   },
 
+  sendMessageStream: async (
+    chatId: string,
+    data: SendMessageRequest,
+    onChunk: (content: string) => void,
+    onDone: (message: Message) => void,
+    onError: (error: string) => void
+  ): Promise<void> => {
+    const response = await fetch(`/api/chats/${chatId}/messages/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || 'Failed to send message')
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('No response body')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.type === 'content') {
+              onChunk(data.content)
+            } else if (data.type === 'done') {
+              onDone(data.message)
+            } else if (data.type === 'error') {
+              onError(data.error)
+            }
+          } catch {
+            // Ignore JSON parse errors for incomplete chunks
+          }
+        }
+      }
+    }
+  },
+
   deleteChat: async (chatId: string): Promise<{ success: boolean; error?: string }> => {
     const response = await apiClient.delete(`/chats/${chatId}`)
     return response.data

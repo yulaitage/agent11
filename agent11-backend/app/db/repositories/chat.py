@@ -75,6 +75,21 @@ class ChatRepository:
             return cls._to_dict(chat)
 
     @classmethod
+    async def delete(cls, chat_id: str) -> bool:
+        """Permanently delete a chat"""
+        async for session in get_session():
+            result = await session.execute(
+                select(Chat).where(Chat.id == chat_id)
+            )
+            chat = result.scalar_one_or_none()
+            if not chat:
+                return False
+
+            await session.delete(chat)
+            await session.commit()
+            return True
+
+    @classmethod
     async def archive(cls, chat_id: str) -> bool:
         """Archive a chat"""
         async for session in get_session():
@@ -117,11 +132,12 @@ class ChatRepository:
             if not chat:
                 return None
 
-            # Append message to messages array
-            messages = chat.messages or []
+            # Create new list to ensure SQLAlchemy tracks the change
+            messages = list(chat.messages) if chat.messages else []
             messages.append(message)
-            chat.messages = messages
-            chat.updated_at = datetime.utcnow()
+            # Set via setattr to ensure SQLAlchemy change tracking works
+            setattr(chat, 'messages', messages)
+            setattr(chat, 'updated_at', datetime.utcnow())
 
             await session.commit()
             await session.refresh(chat)

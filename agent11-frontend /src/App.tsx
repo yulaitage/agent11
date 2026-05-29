@@ -13,8 +13,8 @@ import {
   Send,
   ChevronDown,
   Sparkles,
-  MoreVertical,
-  Download
+  Download,
+  Trash2
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from './context/AuthContext';
@@ -139,23 +139,79 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
     setInputText('');
     setIsLoading(true);
 
-    try {
-      const response = await chatApi.sendMessage(chatId, {
-        message: inputText,
-        // When no skill is selected, pass null so the backend auto-routes.
-        // When a skill button was clicked, use that specific skill.
-        skill: activeSkill ?? null,
-      });
+    // Create placeholder for assistant message (streaming)
+    const assistantMessage: Message = {
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, assistantMessage]);
 
-      if (response.success && response.message) {
-        setMessages(prev => [...prev, response.message as Message]);
-      } else {
-        setError(response.error || '发送消息失败，请重试');
+    try {
+      let hasError = false;
+
+      await chatApi.sendMessageStream(
+        chatId,
+        {
+          message: inputText,
+          skill: activeSkill ?? null,
+        },
+        // onChunk - streaming content
+        (chunk: string) => {
+          setMessages(prev => {
+            const lastIdx = prev.length - 1;
+            if (lastIdx >= 0 && prev[lastIdx].role === 'assistant') {
+              return [
+                ...prev.slice(0, lastIdx),
+                { ...prev[lastIdx], content: prev[lastIdx].content + chunk }
+              ];
+            }
+            return prev;
+          });
+        },
+        // onDone - message complete
+        (message: Message) => {
+          setMessages(prev => {
+            const lastIdx = prev.length - 1;
+            if (lastIdx >= 0 && prev[lastIdx].role === 'assistant') {
+              return [
+                ...prev.slice(0, lastIdx),
+                message
+              ];
+            }
+            return prev;
+          });
+          setIsLoading(false);
+        },
+        // onError
+        (error: string) => {
+          setError(error);
+          setIsLoading(false);
+          hasError = true;
+        }
+      );
+
+      if (hasError) {
+        // Remove the placeholder message on error (last assistant message)
+        setMessages(prev => {
+          const lastIdx = prev.length - 1;
+          if (lastIdx >= 0 && prev[lastIdx].role === 'assistant') {
+            return prev.slice(0, lastIdx);
+          }
+          return prev;
+        });
       }
     } catch (err) {
       console.error('Failed to send message:', err);
       setError('发送消息失败，请重试');
-    } finally {
+      // Remove the placeholder message on error
+      setMessages(prev => {
+        const lastIdx = prev.length - 1;
+        if (lastIdx >= 0 && prev[lastIdx].role === 'assistant') {
+          return prev.slice(0, lastIdx);
+        }
+        return prev;
+      });
       setIsLoading(false);
     }
   };
@@ -194,7 +250,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
         </div>
 
         {activeTab === 'Home' ? (
-          <div className="px-4 flex-1">
+          <div className="px-4 flex-1 flex flex-col overflow-hidden">
             <button
               onClick={() => {
                 setCurrentChatId(null);
@@ -211,7 +267,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
               <motion.div
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="space-y-4"
+                className="space-y-4 flex flex-col overflow-hidden"
               >
                 <div className="flex items-center justify-between px-2">
                   <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Recent Chats</span>
@@ -220,33 +276,34 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
                   </button>
                 </div>
 
-                <div className="space-y-1">
+                <div className="space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent hover:scrollbar-thumb-slate-400">
                   {chats.map((chat) => (
                     <div
                       key={chat.id}
-                      onClick={() => {
-                        if (isLoadingChat) return;
-                        setCurrentChatId(chat.id);
-                        setHasStarted(true);
-                        setMessages([]);  // Clear current messages while loading
-                        setIsLoadingChat(true);
-                        // Load chat messages
-                        chatApi.getChat(chat.id).then(response => {
-                          if (response.messages) {
-                            setMessages(response.messages);
-                          }
-                        }).catch(err => {
-                          console.error('Failed to load chat:', err);
-                          setError('加载对话失败');
-                        }).finally(() => {
-                          setIsLoadingChat(false);
-                        });
-                      }}
                       className={`group flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white hover:shadow-sm transition-all cursor-pointer ${
                         currentChatId === chat.id ? 'bg-white shadow-sm' : ''
                       } ${isLoadingChat && currentChatId === chat.id ? 'opacity-50' : ''}`}
                     >
-                      <div className="flex items-center gap-3 overflow-hidden">
+                      <div
+                        className="flex items-center gap-3 overflow-hidden flex-1"
+                        onClick={() => {
+                          if (isLoadingChat) return;
+                          setCurrentChatId(chat.id);
+                          setHasStarted(true);
+                          setMessages([]);
+                          setIsLoadingChat(true);
+                          chatApi.getChat(chat.id).then(response => {
+                            if (response.messages) {
+                              setMessages(response.messages);
+                            }
+                          }).catch(err => {
+                            console.error('Failed to load chat:', err);
+                            setError('加载对话失败');
+                          }).finally(() => {
+                            setIsLoadingChat(false);
+                          });
+                        }}
+                      >
                         {isLoadingChat && currentChatId === chat.id ? (
                           <div className="w-4 h-4 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin shrink-0" />
                         ) : (
@@ -254,7 +311,28 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
                         )}
                         <span className="text-sm text-slate-600 truncate">{chat.title}</span>
                       </div>
-                      <MoreVertical className="w-4 h-4 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm('确定要删除这个对话吗？')) {
+                            chatApi.deleteChat(chat.id).then(() => {
+                              if (currentChatId === chat.id) {
+                                setCurrentChatId(null);
+                                setMessages([]);
+                                setHasStarted(false);
+                              }
+                              loadChats();
+                            }).catch(err => {
+                              console.error('Failed to delete chat:', err);
+                              setError('删除对话失败');
+                            });
+                          }
+                        }}
+                        className="p-1 hover:bg-red-50 rounded-md transition-colors text-slate-400 hover:text-red-600"
+                        title="删除对话"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   ))}
                 </div>

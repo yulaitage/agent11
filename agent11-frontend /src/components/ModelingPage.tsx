@@ -485,15 +485,57 @@ const DataPreviewPanel: React.FC<{
 }> = ({ table, onClose }) => {
   const [data, setData] = useState<TableDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const LIMIT = 50;
+  const dataRef = useRef<TableDataResponse | null>(null);
+
+  const fetchData = useCallback(async (offset: number, append: boolean = false) => {
+    if (append) {
+      setIsLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
+    try {
+      const result = await modelsApi.getTableData(table, LIMIT, offset);
+      if (append && dataRef.current) {
+        const newData = {
+          ...result,
+          rows: [...dataRef.current.rows, ...result.rows],
+        };
+        dataRef.current = newData;
+        setData(newData);
+      } else {
+        dataRef.current = result;
+        setData(result);
+      }
+      setHasMore(result.rows.length >= LIMIT && (append ? (dataRef.current?.total ?? 0) > (offset + LIMIT) : true));
+    } catch (e) {
+      console.error('Failed to load data', e);
+    } finally {
+      setLoading(false);
+      setIsLoadingMore(false);
+    }
+  }, [table]);
 
   useEffect(() => {
-    setLoading(true);
-    modelsApi.getTableData(table, 20, 0).then(setData).catch(console.error).finally(() => setLoading(false));
-  }, [table]);
+    dataRef.current = null;
+    setOffset(0);
+    setData(null);
+    fetchData(0, false);
+  }, [table, fetchData]);
+
+  const handleLoadMore = () => {
+    if (!data) return;
+    const newOffset = offset + LIMIT;
+    setOffset(newOffset);
+    fetchData(newOffset, true);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-[80vw] max-w-4xl max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-[90vw] max-w-6xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
           <h3 className="text-sm font-semibold text-slate-800">
             <span className="text-indigo-600">Table</span> {table}
@@ -509,9 +551,20 @@ const DataPreviewPanel: React.FC<{
             </div>
           ) : data ? (
             <>
-              <div className="text-[11px] text-slate-500 mb-3">
-                Total rows: <span className="font-semibold text-slate-700">{data.total}</span>
-                {' | '}Showing first {data.rows.length}
+              <div className="text-[11px] text-slate-500 mb-3 flex items-center justify-between">
+                <div>
+                  Total rows: <span className="font-semibold text-slate-700">{data.total}</span>
+                  {' | '}Showing {data.rows.length}
+                </div>
+                {hasMore && !loading && (
+                  <button
+                    onClick={handleLoadMore}
+                    disabled={isLoadingMore}
+                    className="px-3 py-1 text-[10px] font-medium text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50"
+                  >
+                    {isLoadingMore ? 'Loading...' : `Load More (+${Math.min(LIMIT, data.total - data.rows.length)})`}
+                  </button>
+                )}
               </div>
               <table className="w-full text-xs border border-slate-200 rounded-lg overflow-hidden">
                 <thead className="bg-slate-50">

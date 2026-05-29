@@ -1,6 +1,6 @@
 """General Chat 技能 - 通用 LLM 对话（带领域约束）"""
 from typing import Any
-from datetime import datetime
+from datetime import datetime as dt
 from app.agent.skills.base import BaseSkill
 from app.agent.context import ConversationContext
 from app.db.repositories.device import DeviceRepository
@@ -172,66 +172,96 @@ class GeneralChatSkill(BaseSkill):
         q = query.lower()
         parts = []
 
+        # 直接使用 asyncpg 查询，绕过 Repository 层
         try:
-            # 设备总数与状态分布
-            total = await DeviceRepository.count()
-            normal = await DeviceRepository.count(status="normal")
-            warning = await DeviceRepository.count(status="warning")
-            fault = await DeviceRepository.count(status="fault")
-            offline = await DeviceRepository.count(status="offline")
-            parts.append(
-                f"设备概览：共 {total} 台（正常 {normal} | 警告 {warning} | "
-                f"故障 {fault} | 离线 {offline}）"
-            )
-        except Exception:
-            parts.append("设备概览：查询失败")
+            from app.db.postgres import Database
+            pool = Database.get_pool()
+            async with pool.acquire() as conn:
+                # 设备总数与状态分布
+                result = await conn.fetchval("SELECT count(*) FROM devices_info")
+                total = result or 0
 
-        # 区域信息
-        try:
-            zone_match = re.search(r'(\d+)区', query)
-            if zone_match:
-                zone = zone_match.group(1)
-                zone_devices = await DeviceRepository.find_all(geozone=zone, limit=500)
-                if zone_devices:
-                    statuses = {}
-                    for d in zone_devices:
-                        s = d.get("status", "unknown")
-                        statuses[s] = statuses.get(s, 0) + 1
-                    parts.append(
-                        f"{zone}区设备：共 {len(zone_devices)} 台，"
-                        f"状态分布：{statuses}"
-                    )
-        except Exception:
-            pass
-
-        # 活跃故障
-        try:
-            active_faults = await FaultRepository.find_active(limit=100)
-            if active_faults:
-                fault_types: dict[str, int] = {}
-                for f in active_faults:
-                    ft = f.get("fault_type", "unknown")
-                    fault_types[ft] = fault_types.get(ft, 0) + 1
-                parts.append(
-                    f"活跃故障：共 {len(active_faults)} 个，"
-                    f"类型：{fault_types}"
+                normal = await conn.fetchval(
+                    "SELECT count(*) FROM devices_info WHERE status = 'normal'"
                 )
-        except Exception:
-            pass
+                fault = await conn.fetchval(
+                    "SELECT count(*) FROM devices_info WHERE status = 'fault'"
+                )
+                parts.append(
+                    f"设备概览：共 {total} 台（正常 {normal or 0} | 故障 {fault or 0}）"
+                )
+        except Exception as e:
+            parts.append(f"设备概览：查询失败 ({str(e)[:50]})")
 
-        # 今日能耗
+        # 故障记录查询
         try:
-            from datetime import datetime, timedelta
-            now = datetime.utcnow()
-            today_start = now - timedelta(days=1)
-            readings = await ReadingRepository.get_energy_readings(
-                start_time=today_start, end_time=now, limit=1000
-            )
-            total_energy = sum(r.get("energy_kwh", 0) for r in readings)
-            if readings:
-                parts.append(f"今日能耗：约 {total_energy:.2f} kWh（{len(readings)} 条记录）")
-            else:
-                parts.append("今日能耗：暂无数据")
+            if "故障" in query or "事件" in query or "告警" in query:
+                # 解析分组
+                group_match = re.search(r'分组(\d+)', query)
+                group_path = None
+                if group_match:
+                    group_num = group_match.group(1)
+                    group_path = f"0000/{group_num.zfill(4)}%"
+
+                # 解析时间
+                date_match = re.search(r'(\d{4})年\s*(\d{1,2})月', query)
+                time_filter = ""
+                params = []
+                if date_match:
+                    year, month = date_match.groups()
+                    start_date = f"{year}-{month.zfill(2)}-01"
+                    # 计算月末
+                    next_month = int(month) + 1
+                    next_year = int(year)
+                    if next_month > 12:
+                        next_month = 1
+                        next_year += 1
+                    end_date = f"{next_year}-{next_month:02d}-01"
+                    # asyncpg requires datetime objects for date columns
+                    start_dt = dt.strptime(start_date, "%Y-%m-%d")
+                    end_dt = dt.strptime(end_date, "%Y-%m-%d")
+                    if group_path:
+                        fault_query = '''
+                            SELECT count(*) FROM devices_fault
+                            WHERE "businessGroupIdPath" LIKE $1
+                            AND start_date >= $2 AND start_date < $3
+                        '''
+                        params = [group_path + "%", start_dt, end_dt]
+                    else:
+                        fault_query = "SELECT count(*) FROM devices_fault WHERE start_date >= $1 AND start_date < $2"
+                        params = [start_dt, end_dt]
+
+                    from app.db.postgres import Database
+                    pool = Database.get_pool()
+                    async with pool.acquire() as conn:
+                        count = await conn.fetchval(fault_query, *params)
+                        if count and count > 0:
+                            parts.append(f"故障记录：共 {count} 条")
+                        else:
+                            parts.append("故障记录：未找到匹配记录")
+        except Exception as e:
+            parts.append(f"故障查询：失败 ({str(e)[:50]})")
+
+        # 尝试查询具体故障类型
+        try:
+            if "故障" in query and ("什么" in query or "哪些" in query):
+                from app.db.postgres import Database
+                pool = Database.get_pool()
+                async with pool.acquire() as conn:
+                    # 先获取前几条故障记录
+                    rows = await conn.fetch('''
+                        SELECT fault, businessGroupName, start_date
+                        FROM devices_fault
+                        ORDER BY start_date DESC
+                        LIMIT 5
+                    ''')
+                    if rows:
+                        fault_summary = []
+                        for r in rows:
+                            fault_summary.append(
+                                f"{r['fault']}({r['businessGroupName']}, {r['start_date']})"
+                            )
+                        parts.append(f"最新故障：{' | '.join(fault_summary)}")
         except Exception:
             pass
 

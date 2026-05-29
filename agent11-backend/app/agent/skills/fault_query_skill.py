@@ -87,18 +87,29 @@ class FaultQuerySkill(BaseSkill):
         "lux_module_fault": "光照模块故障",
     }
 
-    # 分组信息映射：分组号 → businessGroupIdPath 前缀
+    # 分组信息映射：分组号 → businessGroupIdPath 前缀（完整路径）
+    # 实际数据只有分组9和10，路径格式为 0000/0001/0009 和 0000/0001/00010
     GROUP_PATH_MAP = {
-        "1": "0000/0001",
-        "2": "0000/0002",
-        "3": "0000/0003",
-        "4": "0000/0004",
-        "5": "0000/0005",
-        "分组1": "0000/0001",
-        "分组2": "0000/0002",
-        "分组3": "0000/0003",
-        "分组4": "0000/0004",
-        "分组5": "0000/0005",
+        "1": "0000/0001/0001",
+        "2": "0000/0002/0002",
+        "3": "0000/0003/0003",
+        "4": "0000/0004/0004",
+        "5": "0000/0005/0005",
+        "6": "0000/0006/0006",
+        "7": "0000/0007/0007",
+        "8": "0000/0008/0008",
+        "9": "0000/0001/0009",
+        "10": "0000/0001/00010",
+        "分组1": "0000/0001/0001",
+        "分组2": "0000/0002/0002",
+        "分组3": "0000/0003/0003",
+        "分组4": "0000/0004/0004",
+        "分组5": "0000/0005/0005",
+        "分组6": "0000/0006/0006",
+        "分组7": "0000/0007/0007",
+        "分组8": "0000/0008/0008",
+        "分组9": "0000/0001/0009",
+        "分组10": "0000/0001/00010",
     }
 
     async def execute(
@@ -161,7 +172,8 @@ class FaultQuerySkill(BaseSkill):
         if group_match:
             group_num = group_match.group(1)
             filters["group"] = group_num
-            filters["group_path"] = self.GROUP_PATH_MAP.get(f"分组{group_num}", f"0000/{group_num.zfill(4)}")
+            # 直接从 GROUP_PATH_MAP 获取完整路径
+            filters["group_path"] = self.GROUP_PATH_MAP.get(f"分组{group_num}", f"0000/0001/{group_num.zfill(4)}")
 
         # 也支持 "组1" 格式
         if "group" not in filters:
@@ -169,7 +181,7 @@ class FaultQuerySkill(BaseSkill):
             if group_match:
                 group_num = group_match.group(1)
                 filters["group"] = group_num
-                filters["group_path"] = self.GROUP_PATH_MAP.get(f"分组{group_num}", f"0000/{group_num.zfill(4)}")
+                filters["group_path"] = self.GROUP_PATH_MAP.get(group_num, f"0000/0001/{group_num.zfill(4)}")
 
         # 提取故障类型
         fault_type = None
@@ -189,12 +201,33 @@ class FaultQuerySkill(BaseSkill):
             filters["start_date"] = filters["date"]
             filters["end_date"] = filters["date"]
         else:
-            # 尝试其他日期格式
-            date_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', query)
+            # 尝试 "2026年4月份" 或 "2026年4月" 格式（只有年月，没有日）
+            date_match = re.search(r'(\d{4})年\s*(\d{1,2})月份?', query)
             if date_match:
-                filters["date"] = date_match.group(0)
-                filters["start_date"] = filters["date"]
-                filters["end_date"] = filters["date"]
+                year, month = date_match.groups()
+                filters["year"] = year
+                filters["month"] = month
+                filters["start_date"] = f"{year}-{month.zfill(2)}-01"
+                # 月底
+                month_int = int(month)
+                if month_int in (1, 3, 5, 7, 8, 10, 12):
+                    filters["end_date"] = f"{year}-{month.zfill(2)}-31"
+                elif month_int in (4, 6, 9, 11):
+                    filters["end_date"] = f"{year}-{month.zfill(2)}-30"
+                else:
+                    # 2月，根据年判断闰年
+                    year_int = int(year)
+                    if (year_int % 4 == 0 and year_int % 100 != 0) or (year_int % 400 == 0):
+                        filters["end_date"] = f"{year}-{month.zfill(2)}-29"
+                    else:
+                        filters["end_date"] = f"{year}-{month.zfill(2)}-28"
+            else:
+                # 尝试 "2026-04-22" 格式
+                date_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', query)
+                if date_match:
+                    filters["date"] = date_match.group(0)
+                    filters["start_date"] = filters["date"]
+                    filters["end_date"] = filters["date"]
 
         # 提取时间范围（如 "本月", "上周", "本周"）
         time_range = None
@@ -230,24 +263,32 @@ class FaultQuerySkill(BaseSkill):
         # 分组条件
         if filters.get("group_path"):
             param_idx = len(params) + 1
-            conditions.append(f"businessGroupIdPath LIKE ${param_idx}")
-            params.append(filters["group_path"] + "%")
+            group_path = filters["group_path"]
+            # 使用完整路径匹配（不使用 LIKE 前缀匹配，因为路径是固定的）
+            if group_path.startswith("%"):
+                # 特殊格式（如 %00010%）直接使用
+                conditions.append(f'"businessGroupIdPath" LIKE ${param_idx}')
+                params.append(group_path)
+            else:
+                # 完整路径使用等号匹配
+                conditions.append(f'"businessGroupIdPath" = ${param_idx}')
+                params.append(group_path)
 
-        # 日期条件
+        # 日期条件 - 使用 TO_DATE 函数进行日期比较
         if filters.get("start_date") and filters.get("end_date"):
             param_idx = len(params) + 1
-            conditions.append(f"DATE(start_date) = DATE(${param_idx})")
+            conditions.append(f"start_date >= TO_DATE(${param_idx}, 'YYYY-MM-DD')")
             params.append(filters["start_date"])
             param_idx = len(params) + 1
-            conditions.append(f"DATE(end_date) = DATE(${param_idx})")
+            conditions.append(f"start_date < (TO_DATE(${param_idx}, 'YYYY-MM-DD') + interval '1 day')")
             params.append(filters["end_date"])
         elif filters.get("start_date"):
             param_idx = len(params) + 1
-            conditions.append(f"DATE(start_date) >= DATE(${param_idx})")
+            conditions.append(f"start_date >= TO_DATE(${param_idx}, 'YYYY-MM-DD')")
             params.append(filters["start_date"])
         elif filters.get("end_date"):
             param_idx = len(params) + 1
-            conditions.append(f"DATE(end_date) <= DATE(${param_idx})")
+            conditions.append(f"start_date < (TO_DATE(${param_idx}, 'YYYY-MM-DD') + interval '1 day')")
             params.append(filters["end_date"])
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
@@ -257,10 +298,10 @@ class FaultQuerySkill(BaseSkill):
                 id,
                 device_id,
                 fault,
-                businessGroupId,
-                businessGroupName,
-                businessGroupIdPath,
-                businessGroupNamePath,
+                "businessGroupId",
+                "businessGroupName",
+                "businessGroupIdPath",
+                "businessGroupNamePath",
                 start_date,
                 end_date,
                 created_at

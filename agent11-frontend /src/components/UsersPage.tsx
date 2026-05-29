@@ -1,10 +1,6 @@
-import React from 'react';
-import { 
-  Users, 
-  ExternalLink, 
-  Settings, 
-  CheckCircle2,
-  MoreHorizontal
+import {
+  ExternalLink,
+  CheckCircle2
 } from 'lucide-react';
 
 export const UsersSidebar = () => {
@@ -22,12 +18,7 @@ export const UsersSidebar = () => {
   );
 };
 
-export const UsersHeaderExtras = () => (
-  <div className="flex items-center gap-2 text-slate-300 text-sm cursor-pointer hover:text-white transition-colors">
-    <span>GovChat V1</span>
-    <Settings className="w-4 h-4" />
-  </div>
-);
+export const UsersHeaderExtras = () => null;
 
 const UsersPage = () => {
   const users = [

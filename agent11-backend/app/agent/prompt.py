@@ -61,51 +61,39 @@ SYSTEM_PROMPT = """你是 AGENT 11，一个智能基础设施管理 AI 助手。
 在给出最终答案前务必逐步推理。
 """
 
-SKILL_ROUTER_PROMPT = """根据用户消息确定使用哪个技能。
+SKILL_ROUTER_PROMPT = """你是技能路由专家。根据用户输入的语义意图，判断最合适的技能。
 
-可用技能：
-- query：数据查询（功率、能耗、状态、设备信息、故障事件、事件记录、告警）
-- troubleshoot：故障诊断和根因分析
-- prediction：预测（故障、能耗）
-- maintenance_report：周期性报告（周报、月报、年报）
-- flexible_report：自定义临时数据请求
-- general_chat：通用对话（问候、介绍、非设施管理话题）
+技能列表：
+- query: 查询设备信息、统计数据、能耗数据
+- fault_query: 查询故障记录、筛选故障类型/分组/时间
+- troubleshoot: 诊断故障原因、排查问题
+- prediction: 预测故障、能耗趋势
+- maintenance_report: 生成运维报告、周报月报
+- flexible_report: 数据分析、临时报表
+- general_chat: 闲聊、问候、一般问题
 
-重要映射规则：
-- "事件"、"告警"、"故障事件"、"告警事件" → query
-- 故障类型查询（负载功率过高、高温、闪灯等）→ query
-- "故障" + 查询 → query 或 flexible_report（data_source=faults）
-- "哪些设备故障" → flexible_report
-- "显示所有有故障的设备" → flexible_report
-- "查询故障记录" → query
-- 英文 "Show me all faults" / "list all faults" / "all fault events" → query（不用 flexible_report）
-- "bar chart" / "histogram" / "柱状图" + fault → flexible_report（带图表）
-- "pie chart" / "饼图" + fault → flexible_report（带图表）
+分析步骤：
+1. 理解用户查询的核心意图
+2. 判断是否涉及"故障"查询（不仅仅是包含"故障"这个词）
+3. 如果涉及分组+时间+故障类型的组合查询，优先 fault_query
+4. 如果涉及"为什么"、"什么原因"、"诊断"，选 troubleshoot
+5. 如果涉及"预测"、"未来趋势"、"风险"，选 prediction
+6. 如果涉及"报告"、"月报"、"年报"，选 maintenance_report
+7. 如果涉及"分析"、"统计"、"导出数据"，选 flexible_report
+8. 如果只是问候或闲聊，选 general_chat
 
-故障类型关键词（任一匹配都应路由到query）：
-- AC主电压过高/过低 (ac_high/ac_low_main_voltage)
-- 负载功率过高/过低 (high/low_load_power)
-- 负载电流过高/过低 (high/low_load_current)
-- 功率因素过低 (low_power_factor)
-- 温度过高 (high_temperature)
-- 电表错误、光感错误、驱动器错误 (meter_error, light_perception_error, drive_error)
-- 灯失败、闪灯 (lamp_failed, flash_lights)
-- 继电器粘连/断开 (relay_adhesion, relay_open)
-- 漏电报警 (leakage_alarm)
-- 等等...
+严格规则：
+- 如果用户询问"有哪些故障"、"什么故障"、"故障列表"，选 fault_query
+- 如果用户询问"2026年4月分组1有哪些故障"，选 fault_query
+- 如果用户询问"设备状态"、"设备列表"、"统计"，选 query
+- 如果用户问"生成本月报告"，选 maintenance_report
+- 如果用户只是问候（你好、hi、hello），选 general_chat
 
-示例：
-- "55 区域本月用了多少电？" → query
-- "哪些路灯可能在 7 天内故障？" → prediction
-- "为什么这些灯闪烁？" → troubleshoot
-- "生成 3 月月度报告" → maintenance_report
-- "显示所有有故障的设备" → flexible_report
-- "温度过高的事件" → query
-- "负载功率过高事件" → query
-- "漏电报警记录" → query
-- "你好，你是谁" → general_chat
-- "今天天气怎么样" → general_chat
-- "今天系统整体运行情况怎么样" → flexible_report
+示例输出：
+输入: "2026年4月，分组10有哪些故障？" 输出: fault_query
+输入: "你好" 输出: general_chat
+输入: "生成本月报告" 输出: maintenance_report
+输入: "查询设备状态" 输出: query
 
-只返回技能名称：query|troubleshoot|prediction|maintenance_report|flexible_report|general_chat
+直接输出技能名称，不要解释。
 """

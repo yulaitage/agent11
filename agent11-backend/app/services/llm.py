@@ -120,6 +120,7 @@ class LLMService:
         callback=None
     ):
         """流式调用 LLM"""
+        import re
         url = f"{self._config['base_url']}/chat/completions"
 
         messages = []
@@ -146,20 +147,29 @@ class LLMService:
             if self._config.get("api_key"):
                 headers["Authorization"] = f"Bearer {self._config['api_key']}"
             async with client.stream("POST", url, json=payload, headers=headers) as response:
-                async for chunk in response.aiter_lines():
-                    if chunk:
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    # Strip "data: " prefix for SSE format
+                    if line.startswith("data: "):
+                        line = line[6:]
+                    else:
+                        continue
+                    try:
                         import json
-                        try:
-                            data = json.loads(chunk)
-                            if "choices" in data and len(data["choices"]) > 0:
-                                delta = data["choices"][0].get("delta", {})
-                                if delta.get("content"):
-                                    content = delta["content"]
-                                    if callback:
-                                        callback(content)
-                                    yield content
-                        except json.JSONDecodeError:
+                        data = json.loads(line)
+                        if "choices" not in data or not data["choices"]:
                             continue
+                        delta = data["choices"][0].get("delta", {})
+                        if not delta.get("content"):
+                            continue
+                        content = delta["content"]
+                        # 直接输出每个 chunk（不再过滤）
+                        if callback:
+                            callback(content)
+                        yield content
+                    except json.JSONDecodeError:
+                        continue
 
     async def update_config(self, updates: dict):
         """更新配置并持久化到 .env 文件"""
