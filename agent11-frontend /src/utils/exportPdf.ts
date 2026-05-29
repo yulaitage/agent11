@@ -78,6 +78,7 @@ function printHtml(html: string) {
   win.document.close()
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+function esc(s: unknown): string {
+  const text = s == null ? '' : String(s)
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
