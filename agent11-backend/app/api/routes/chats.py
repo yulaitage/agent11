@@ -26,7 +26,7 @@ async def _llm_detect_skill_route(message: str, llm: LLMService) -> str | None:
     """
     try:
         response = await llm.invoke(
-            f"用户查询: {message}\n\n请只返回技能名称（query/fault_query/troubleshoot/prediction/maintenance_report/flexible_report/general_chat），不要解释。",
+            SKILL_ROUTER_PROMPT + f"\n\n用户查询: {message}\n\n请只返回技能名称:",
             system=False,
             temperature=0.1
         )

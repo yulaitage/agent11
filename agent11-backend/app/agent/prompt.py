@@ -85,7 +85,7 @@ SKILL_ROUTER_PROMPT = """你是技能路由专家。根据用户输入的语义�
 严格规则：
 - 如果用户询问"有哪些故障"、"什么故障"、"故障列表"，选 fault_query
 - 如果用户询问"2026年4月分组1有哪些故障"，选 fault_query
-- 如果用户询问"设备状态"、"设备列表"、"统计"，选 query
+- 如果用户询问"设备状态"、"设备列表"、"列出所有设备"、"查看设备"、"统计"、"所有设备"，选 flexible_report
 - 如果用户问"生成本月报告"，选 maintenance_report
 - 如果用户只是问候（你好、hi、hello），选 general_chat
 
@@ -93,7 +93,10 @@ SKILL_ROUTER_PROMPT = """你是技能路由专家。根据用户输入的语义�
 输入: "2026年4月，分组10有哪些故障？" 输出: fault_query
 输入: "你好" 输出: general_chat
 输入: "生成本月报告" 输出: maintenance_report
-输入: "查询设备状态" 输出: query
+输入: "查询设备状态" 输出: flexible_report
+输入: "列出所有设备" 输出: flexible_report
+输入: "查看设备列表" 输出: flexible_report
+输入: "分组10所有故障" 输出: fault_query
 
 直接输出技能名称，不要解释。
 """
