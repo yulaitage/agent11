@@ -31,6 +31,7 @@ class DeviceRepository:
         status: Optional[str] = None,
         device_type: Optional[str] = None,
         street_name: Optional[str] = None,
+        business_group: Optional[str] = None,
         limit: int = 100
     ) -> list[dict]:
         """Find all devices with optional filters"""
@@ -45,6 +46,8 @@ class DeviceRepository:
                 query = query.where(DeviceInfo.device_type == device_type)
             if street_name:
                 query = query.where(DeviceInfo.street_name.like(f"%{street_name}%"))
+            if business_group:
+                query = query.where(DeviceInfo.businessGroupName == business_group)
 
             query = query.limit(limit)
 

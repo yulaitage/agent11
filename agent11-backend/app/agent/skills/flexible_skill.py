@@ -86,11 +86,14 @@ class FlexibleSkill(BaseSkill):
             '  "includes_location": false\n'
             '}\n\n'
             "规则：\n"
-            '1. 如果用户提到具体值（如街道名、状态值、类型），放到 filters 中。例如：\n'
+            '1. 如果用户提到具体值（如街道名、状态值、类型、分组），放到 filters 中。\n'
             '   "在和平路上的设备" -> filters: {"street_name": "和平路"}\n'
             '   "状态1的设备" -> filters: {"status": "1"}\n'
-            '   "分组9的设备" -> filters: {"businessGroupName": "分组9"}\n'
+            '   "分组9有几台设备" -> filters: {"businessGroupName": "分组9"}\n'
+            '   "分组9" -> filters: {"businessGroupName": "分组9"}\n'
+            '   "分组10" -> filters: {"businessGroupName": "分组10"}\n'
             '   "路灯" -> filters: {"device_type": "streetlight"}\n'
+            'IMPORTANT: 分组X（X是数字）要作为 businessGroupName 过滤，不要忽略\n'
             '2. "按XX统计"或"XX分布" -> aggregation 为 custom_group, group_column 为列名, group_dim 为中文维度名\n'
             '3. "有多少"、"多少个"、"总共" -> 不清求分组, aggregation 为 null\n'
             '4. "健康度" -> aggregation 为 health_score\n'
@@ -201,6 +204,7 @@ class FlexibleSkill(BaseSkill):
                 status=filters.get("status"),
                 device_type=filters.get("device_type"),
                 street_name=filters.get("street_name"),
+                business_group=filters.get("businessGroupName"),
                 limit=2000
             )
 
