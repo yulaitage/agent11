@@ -63,6 +63,36 @@ async def _llm_detect_skill_route(message: str, llm: LLMService) -> str | None:
         return None
 
 
+def _keyword_fallback_route(message: str) -> str | None:
+    """关键词兜底路由：LLM 路由失败时的备选"""
+    # 故障类型关键词（来自 fault_query_skill.FAULT_TYPE_MAP）
+    fault_keywords = [
+        "温度过高", "高温", "过热",
+        "电表故障", "电表错误",
+        "灯具功率过高", "灯具功率过低", "灯具故障", "灯故障",
+        "调光故障", "灯具意外亮起",
+        "电流过高", "电流过低", "功率因数过低",
+        "继电器故障", "控制设备通信故障", "通信故障", "通信中断",
+        "停电", "断电", "供电中断",
+        "供电电压过高", "供电电压过低",
+        "高负载功率",
+        "光照通信故障", "光照模块故障",
+        "分组控制故障", "链路控制故障",
+        "循环故障", "周期性故障",
+    ]
+    for kw in fault_keywords:
+        if kw in message:
+            return "fault_query"
+
+    # 设备查询关键词
+    device_keywords = ["设备", "路灯", "统计", "有多少"]
+    for kw in device_keywords:
+        if kw in message:
+            return "flexible_report"
+
+    return None
+
+
 class SendMessageRequest(BaseModel):
     message: str
     skill: str | None = None
@@ -179,6 +209,8 @@ async def send_message_stream(chat_id: str, request: SendMessageRequest, user_id
             # general_chat 自动路由：使用 LLM 分析消息意图
             if skill_used == "general_chat":
                 detected_skill = await _llm_detect_skill_route(request.message, llm)
+                if not detected_skill:
+                    detected_skill = _keyword_fallback_route(request.message)
                 if detected_skill:
                     skill_used = detected_skill
                     agent = AgentGenerator.get_instance()

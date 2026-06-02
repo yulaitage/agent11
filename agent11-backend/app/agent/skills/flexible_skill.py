@@ -98,12 +98,13 @@ class FlexibleSkill(BaseSkill):
             '3. "有多少"、"多少个"、"总共" -> 不清求分组, aggregation 为 null\n'
             '4. "健康度" -> aggregation 为 health_score\n'
             '5. "趋势"、"走势" -> aggregation 为 trend, data_source 为 energy\n'
-            '6. 故障相关设 data_source 为 faults\n'
-            '7. 能耗相关设 data_source 为 energy\n'
+            '6. 故障类型（灯具功率过高、温度过高、电表故障等）不需要放 filters，不需要切换 data_source\n'
+            '7. 能耗查询设 data_source 为 energy\n'
             '8. 涉及街道的 filter key: street_name\n'
             '9. 涉及分组的 filter key: businessGroupName\n'
             '10. 涉及状态的 filter key: status\n'
-            '11. 涉及设备类型的 filter key: device_type\n\n'
+            '11. 涉及设备类型的 filter key: device_type\n'
+            '12. data_source 仅能为 devices 或 energy，不能为 faults\n\n'
             f"用户问题: {query}"
         )
 
@@ -162,6 +163,9 @@ class FlexibleSkill(BaseSkill):
     async def _execute_flexible_query(self, plan: dict) -> list[dict]:
         """执行灵活查询（多数据源支持）"""
         data_source = plan.get("data_source", "devices")
+        # fault_records 表不存在，故障查询走 devices_fault 或 fault_query skill
+        if data_source == "faults":
+            data_source = "devices"
         filters = plan.get("filters", {})
         time_range = plan.get("time_range")
         aggregation = plan.get("aggregation")
