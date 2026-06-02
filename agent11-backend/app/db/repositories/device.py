@@ -30,6 +30,7 @@ class DeviceRepository:
         geozone: Optional[str] = None,
         status: Optional[str] = None,
         device_type: Optional[str] = None,
+        street_name: Optional[str] = None,
         limit: int = 100
     ) -> list[dict]:
         """Find all devices with optional filters"""
@@ -42,6 +43,8 @@ class DeviceRepository:
                 query = query.where(DeviceInfo.status == status)
             if device_type:
                 query = query.where(DeviceInfo.device_type == device_type)
+            if street_name:
+                query = query.where(DeviceInfo.street_name.like(f"%{street_name}%"))
 
             query = query.limit(limit)
 

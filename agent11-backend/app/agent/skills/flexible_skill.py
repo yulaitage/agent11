@@ -101,6 +101,23 @@ class FlexibleSkill(BaseSkill):
                 plan["filters"]["device_type"] = code
                 break
 
+        # --- 自然语言筛选：街道/路段 ---
+        street_match = re.search(r'在\s*([一-鿿]+路)', query)
+        if not street_match:
+            street_match = re.search(r'([一-鿿]+路)\s*上的', query)
+        if not street_match:
+            street_match = re.search(r'([一-鿿]+路)\s*的', query)
+        if street_match:
+            plan["filters"]["street_name"] = street_match.group(1)
+
+        # --- 自然语言筛选：状态（如 状态1、状态为1、状态是1） ---
+        status_match = re.search(r'状态[为是]?\s*(\d+)', query)
+        if status_match:
+            plan["filters"]["status"] = status_match.group(1)
+
+        # --- "有多少" → 触发计数（去掉聚合，用默认输出直接显示筛选后的条数） ---
+        # 已有筛选条件（街道/状态）时，数量会自然体现在结果中
+
         # --- 时间范围 ---
         if any(k in q for k in ["今天", "今日", "24小时", "24h"]):
             plan["time_range"] = "1d"
@@ -298,6 +315,7 @@ class FlexibleSkill(BaseSkill):
                 geozone=filters.get("geozone"),
                 status=filters.get("status"),
                 device_type=filters.get("device_type"),
+                street_name=filters.get("street_name"),
                 limit=2000
             )
 
@@ -373,7 +391,14 @@ class FlexibleSkill(BaseSkill):
         # 少于50台显示详细清单，超过50台则汇总统计
         if count <= 50:
             sample = results[:20]
-            lines = [f"找到 {count} 台设备：\n"]
+            # 构建筛选描述
+            flt = plan.get("filters", {})
+            desc = ""
+            if flt.get("street_name"):
+                desc += flt["street_name"]
+            if flt.get("status"):
+                desc += f"状态{flt['status']}"
+            lines = [f"{desc}共 {count} 台设备：\n" if desc else f"找到 {count} 台设备：\n"]
             for r in sample:
                 did = r.get("device_id") or r.get("deviceId", "N/A")
                 name = r.get("device_name") or r.get("deviceName", "")
@@ -384,7 +409,9 @@ class FlexibleSkill(BaseSkill):
                 lines.append(f"- {' | '.join(parts)}")
             if count > 20:
                 lines.append(f"\n... 还有 {count - 20} 台设备")
-            lines.append("\n💡 如需定制统计表格，请告诉我统计维度（如按街道统计、按状态统计）")
+            # 如果有筛选条件（已按特定维度查询），不显示定制提示
+            if not plan.get("filters"):
+                lines.append("\n💡 如需定制统计表格，请告诉我统计维度（如按街道统计、按状态统计）")
             return "\n".join(lines)
 
         # 超过50台：汇总统计（按状态、类型、分组）
