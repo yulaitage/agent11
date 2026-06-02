@@ -330,18 +330,22 @@ class FlexibleSkill(BaseSkill):
         if aggregation == "compare":
             return f"对比分析完成，共 {count} 条记录参与排名。"
 
-        sample = results[:20]
-        lines = [f"找到 {count} 条匹配记录：\n"]
-        for r in sample:
-            did = r.get("device_id") or r.get("deviceId", "N/A")
-            name = r.get("device_name") or r.get("deviceName", "")
-            status = r.get("status", r.get("fault_status", "unknown"))
-            if name:
-                lines.append(f"- {name}({did}): {status}")
-            else:
-                lines.append(f"- {did}: {status}")
-        if count > 20:
-            lines.append(f"\n... 还有 {count - 20} 条记录")
+        # 汇总统计（按状态、类型、分组）
+        statuses: dict[str, int] = {}
+        types: dict[str, int] = {}
+        groups: dict[str, int] = {}
+        for r in results:
+            s = r.get("status") or "unknown"
+            statuses[s] = statuses.get(s, 0) + 1
+            t = r.get("device_type") or "unknown"
+            types[t] = types.get(t, 0) + 1
+            g = r.get("businessGroupName") or "其他"
+            groups[g] = groups.get(g, 0) + 1
+
+        lines = [f"共找到 {count} 台设备\n"]
+        lines.append(f"■ 按状态：{' | '.join([f'{k} {v}台' for k, v in sorted(statuses.items(), key=lambda x: -x[1])])}")
+        lines.append(f"■ 按类型：{' | '.join([f'{k} {v}台' for k, v in sorted(types.items(), key=lambda x: -x[1])])}")
+        lines.append(f"■ 按分组：{' | '.join([f'{k} {v}台' for k, v in sorted(groups.items(), key=lambda x: -x[1])])}")
         return "\n".join(lines)
 
     def _build_chart(self, base: dict, plan: dict) -> dict:
@@ -673,21 +677,27 @@ class FlexibleSkill(BaseSkill):
                 "chart": chart,
             }
 
-        # ---------- 默认表格 ----------
-        headers = ["设备ID", "设备名称", "设备类型", "分组", "街道", "状态", "纬度", "经度"]
+        # ---------- 默认统计表格 ----------
+        # 汇总统计（按状态、类型、分组）
+        statuses: dict[str, int] = {}
+        types: dict[str, int] = {}
+        groups: dict[str, int] = {}
+        for r in results:
+            s = r.get("status") or "unknown"
+            statuses[s] = statuses.get(s, 0) + 1
+            t = r.get("device_type") or "unknown"
+            types[t] = types.get(t, 0) + 1
+            g = r.get("businessGroupName") or "其他"
+            groups[g] = groups.get(g, 0) + 1
 
+        headers = ["统计维度", "分类", "数量"]
         rows = []
-        for r in results[:100]:
-            rows.append([
-                r.get("device_id") or r.get("deviceId", ""),
-                r.get("device_name") or r.get("deviceName", ""),
-                r.get("device_type") or r.get("type", ""),
-                r.get("businessGroupName") or "",
-                r.get("street_name") or "",
-                r.get("status") or r.get("fault_status", ""),
-                str(r.get("latitude") or ""),
-                str(r.get("longitude") or ""),
-            ])
+        for k, v in sorted(statuses.items(), key=lambda x: -x[1]):
+            rows.append(["按状态", k, str(v)])
+        for k, v in sorted(types.items(), key=lambda x: -x[1]):
+            rows.append(["按类型", k, str(v)])
+        for k, v in sorted(groups.items(), key=lambda x: -x[1]):
+            rows.append(["按分组", k, str(v)])
 
         return {
             "table": {"headers": headers, "rows": rows, "total": len(results)}
