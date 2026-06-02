@@ -674,23 +674,20 @@ class FlexibleSkill(BaseSkill):
             }
 
         # ---------- 默认表格 ----------
-        headers = ["设备ID", "设备名称", "设备类型", "分组", "街道", "状态"]
-        if plan.get("includes_location"):
-            headers.extend(["纬度", "经度"])
+        headers = ["设备ID", "设备名称", "设备类型", "分组", "街道", "状态", "纬度", "经度"]
 
         rows = []
         for r in results[:100]:
-            row = [
+            rows.append([
                 r.get("device_id") or r.get("deviceId", ""),
                 r.get("device_name") or r.get("deviceName", ""),
                 r.get("device_type") or r.get("type", ""),
                 r.get("businessGroupName") or "",
                 r.get("street_name") or "",
                 r.get("status") or r.get("fault_status", ""),
-            ]
-            if plan.get("includes_location"):
-                row.extend([r.get("latitude", ""), r.get("longitude", "")])
-            rows.append(row)
+                str(r.get("latitude") or ""),
+                str(r.get("longitude") or ""),
+            ])
 
         return {
             "table": {"headers": headers, "rows": rows, "total": len(results)}
