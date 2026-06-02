@@ -186,6 +186,33 @@ class FlexibleSkill(BaseSkill):
                 plan["compare_field"] = "device_count"
                 plan["chart"] = {"type": chart_style if chart_style == "horizontal_bar" else "bar", "title": "设备数量对比"}
 
+        # --- 定制分组（按 XX 统计）优先于通用汇总 ---
+        custom_group_map = {
+            "街道": "street_name",
+            "路段": "street_name",
+            "状态": "status",
+            "类型": "device_type",
+            "设备类型": "device_type",
+            "分组": "businessGroupName",
+            "区域": "businessGroupName",
+            "功率": "wattage",
+            "瓦数": "wattage",
+            "安装日期": "install_date",
+        }
+        group_match = re.search(r'(?:按|根据|以)\s*(\S+)', query)
+        if group_match:
+            dim = group_match.group(1)
+            # 去掉末尾的 统计/汇总/分组/排序/排列
+            for sfx in ["统计", "汇总", "分组", "排序", "排列"]:
+                if dim.endswith(sfx):
+                    dim = dim[:-len(sfx)]
+                    break
+            col = custom_group_map.get(dim)
+            if col:
+                plan["aggregation"] = "custom_group"
+                plan["group_column"] = col
+                plan["group_dim"] = dim
+
         elif any(k in q for k in ["汇总", "统计", "总数", "分布"]):
             if plan["data_source"] == "energy":
                 plan["aggregation"] = "energy_summary"
@@ -330,6 +357,19 @@ class FlexibleSkill(BaseSkill):
         if aggregation == "compare":
             return f"对比分析完成，共 {count} 条记录参与排名。"
 
+        # 定制分组统计
+        if aggregation == "custom_group":
+            dim = plan.get("group_dim", plan.get("group_column", ""))
+            col = plan.get("group_column", "")
+            counts: dict[str, int] = {}
+            for r in results:
+                val = str(r.get(col) or "其他")
+                counts[val] = counts.get(val, 0) + 1
+            lines = [f"按{dim}统计（共 {count} 台设备）：\n"]
+            for k, v in sorted(counts.items(), key=lambda x: -x[1]):
+                lines.append(f"- {k}: {v}台")
+            return "\n".join(lines)
+
         # 少于50台显示详细清单，超过50台则汇总统计
         if count <= 50:
             sample = results[:20]
@@ -344,6 +384,7 @@ class FlexibleSkill(BaseSkill):
                 lines.append(f"- {' | '.join(parts)}")
             if count > 20:
                 lines.append(f"\n... 还有 {count - 20} 台设备")
+            lines.append("\n💡 如需定制统计表格，请告诉我统计维度（如按街道统计、按状态统计）")
             return "\n".join(lines)
 
         # 超过50台：汇总统计（按状态、类型、分组）
@@ -690,6 +731,25 @@ class FlexibleSkill(BaseSkill):
             }, plan)
             return {
                 "table": {"headers": ["区域", "数量"], "rows": [[k, str(v)] for k, v in sorted_items], "total": len(sorted_items)},
+                "chart": chart,
+            }
+
+        # ---------- 定制分组统计 ----------
+        if aggregation == "custom_group":
+            dim = plan.get("group_dim", plan.get("group_column", ""))
+            col = plan.get("group_column", "")
+            counts: dict[str, int] = {}
+            for r in results:
+                val = str(r.get(col) or "其他")
+                counts[val] = counts.get(val, 0) + 1
+            labels = sorted(counts.keys(), key=lambda k: counts[k], reverse=True)
+            values = [counts[k] for k in labels]
+            chart = self._build_chart({
+                "title": f"按{dim}统计",
+                "labels": labels, "values": values, "unit": "台",
+            }, plan)
+            return {
+                "table": {"headers": [f"按{dim}", "数量"], "rows": [[k, str(v)] for k, v in zip(labels, values)], "total": len(labels)},
                 "chart": chart,
             }
 
