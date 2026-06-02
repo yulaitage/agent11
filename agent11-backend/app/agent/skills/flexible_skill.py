@@ -63,194 +63,79 @@ class FlexibleSkill(BaseSkill):
         }
 
     async def _plan_query(self, query: str, llm: Any) -> dict:
-        """规划查询（增强版关键词解析，支持环形图、水平柱状图、健康度、时段分析）"""
-        import re
+        """使用 LLM 分析用户自然语言，生成查询计划"""
+        import re, json
 
-        q = query.lower()
-        plan: dict[str, Any] = {
-            "collection": "devices",
-            "filters": {},
-            "includes_location": False,
-            "aggregation": None,
-            "chart": None,
-            "time_range": None,
-            "data_source": "devices",  # devices | energy | faults
-        }
+        prompt = (
+            "你是一个数据分析专家。根据用户的自然语言问题，生成结构化的数据查询计划。\n\n"
+            "可用数据列（devices_info 表）：\n"
+            "- device_id, device_name, device_type, status, street_name\n"
+            "- businessGroupName, businessGroupNamePath, wattage, rated_power\n"
+            "- latitude, longitude, install_date\n\n"
+            "还可用：devices_fault（故障记录）, 能耗数据\n\n"
+            '输出 JSON 格式（仅 JSON，不要解释）：\n'
+            '{\n'
+            '  "data_source": "devices",\n'
+            '  "filters": {},\n'
+            '  "aggregation": null,\n'
+            '  "group_column": null,\n'
+            '  "group_dim": null,\n'
+            '  "chart": null,\n'
+            '  "sort": false,\n'
+            '  "sort_desc": true,\n'
+            '  "includes_location": false\n'
+            '}\n\n'
+            "规则：\n"
+            '1. 如果用户提到具体值（如街道名、状态值、类型），放到 filters 中。例如：\n'
+            '   "在和平路上的设备" -> filters: {"street_name": "和平路"}\n'
+            '   "状态1的设备" -> filters: {"status": "1"}\n'
+            '   "分组9的设备" -> filters: {"businessGroupName": "分组9"}\n'
+            '   "路灯" -> filters: {"device_type": "streetlight"}\n'
+            '2. "按XX统计"或"XX分布" -> aggregation 为 custom_group, group_column 为列名, group_dim 为中文维度名\n'
+            '3. "有多少"、"多少个"、"总共" -> 不清求分组, aggregation 为 null\n'
+            '4. "健康度" -> aggregation 为 health_score\n'
+            '5. "趋势"、"走势" -> aggregation 为 trend, data_source 为 energy\n'
+            '6. 故障相关设 data_source 为 faults\n'
+            '7. 能耗相关设 data_source 为 energy\n'
+            '8. 涉及街道的 filter key: street_name\n'
+            '9. 涉及分组的 filter key: businessGroupName\n'
+            '10. 涉及状态的 filter key: status\n'
+            '11. 涉及设备类型的 filter key: device_type\n\n'
+            f"用户问题: {query}"
+        )
 
-        # --- 数据域检测 ---
-        if any(k in q for k in ["能耗", "用电", "电量", "kwh", "功率", "电压", "电流"]):
-            plan["data_source"] = "energy"
-        elif any(k in q for k in ["故障", "fault", "损坏", "维修", "修复", "事件", "告警", "告警事件", "fault_event", "alert"]):
-            plan["data_source"] = "faults"
+        try:
+            import re, json
+            response = await llm.invoke(prompt, system=False, temperature=0.1)
+            json_str = response.strip()
+            import re
+            json_str = re.sub(r'<think>.*?</think>', '', json_str, flags=re.DOTALL)
+            json_str = re.sub(r'```json|```', '', json_str).strip()
+            start = json_str.find("{")
+            end = json_str.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                json_str = json_str[start:end+1]
+                plan = json.loads(json_str)
+                defaults = {
+                    "data_source": "devices", "filters": {},
+                    "aggregation": None, "group_column": None,
+                    "group_dim": None, "chart": None,
+                    "sort": False, "sort_desc": True, "includes_location": False,
+                }
+                print(f"[FlexibleSkill] LLM plan: {plan}")
+                for k, v in defaults.items():
+                    plan.setdefault(k, v)
+                return plan
+        except Exception as e:
+            print(f"[FlexibleSkill] plan_query failed: {e}")
+            import traceback
+            traceback.print_exc()
 
-        # --- 区域 ---
-        zone_match = re.search(r'(\d+)区', query)
-        if zone_match:
-            plan["filters"]["geozone"] = zone_match.group(1)
-            plan["includes_location"] = True
-
-        # --- 状态 ---
-        for status, code in [("故障", "fault"), ("正常", "normal"), ("警告", "warning"), ("离线", "offline")]:
-            if status in query:
-                plan["filters"]["status"] = code
-                break
-
-        # --- 设备类型 ---
-        for dtype, code in [("路灯", "streetlight"), ("控制器", "controller"), ("传感器", "sensor")]:
-            if dtype in query:
-                plan["filters"]["device_type"] = code
-                break
-
-        # --- 自然语言筛选：街道/路段 ---
-        street_match = re.search(r'在\s*([一-鿿]+路)', query)
-        if not street_match:
-            street_match = re.search(r'([一-鿿]+路)\s*上的', query)
-        if not street_match:
-            street_match = re.search(r'([一-鿿]+路)\s*的', query)
-        if street_match:
-            plan["filters"]["street_name"] = street_match.group(1)
-
-        # --- 自然语言筛选：状态（如 状态1、状态为1、状态是1） ---
-        status_match = re.search(r'状态[为是]?\s*(\d+)', query)
-        if status_match:
-            plan["filters"]["status"] = status_match.group(1)
-
-        # --- "有多少" → 触发计数（去掉聚合，用默认输出直接显示筛选后的条数） ---
-        # 已有筛选条件（街道/状态）时，数量会自然体现在结果中
-
-        # --- 时间范围 ---
-        if any(k in q for k in ["今天", "今日", "24小时", "24h"]):
-            plan["time_range"] = "1d"
-        elif any(k in q for k in ["本周", "这周", "7天", "7d"]):
-            plan["time_range"] = "7d"
-        elif any(k in q for k in ["本月", "这个月", "30天", "30d"]):
-            plan["time_range"] = "30d"
-        elif any(k in q for k in ["本年", "今年", "年度", "一年", "365天"]):
-            plan["time_range"] = "1y"
-
-        # --- 图表样式偏好 ---
-        chart_style = "bar"  # default
-        if any(k in q for k in ["饼图", "环形图", "占比", "比例", "proportion"]):
-            chart_style = "donut" if any(k in q for k in ["环形"]) else "pie"
-        elif any(k in q for k in ["水平", "横向"]):
-            chart_style = "horizontal_bar"
-        # 英文图表类型检测
-        elif any(k in q for k in ["bar chart", "histogram", "柱状图", "柱形图"]):
-            chart_style = "bar"
-
-        # --- 图表 + 故障 = 需要聚合图表数据 ---
-        if chart_style == "bar" and plan["data_source"] == "faults":
-            plan["aggregation"] = "faults_by_type"
-            plan["chart"] = {"type": "bar", "title": "故障类型分布（柱状图）"}
-
-        # --- 聚合类型检测 ---
-        # 健康度
-        if any(k in q for k in ["健康度", "健康评分", "健康状态", "健康状况"]):
-            plan["aggregation"] = "health_score"
-            plan["chart"] = {"type": chart_style, "title": "设备健康度分布"}
-
-        # 设备年龄
-        elif any(k in q for k in ["设备年龄", "老化", "使用年限", "安装时间", "服役"]):
-            plan["aggregation"] = "age_distribution"
-            plan["chart"] = {"type": "bar", "title": "设备年龄分布"}
-
-        # 按时段/小时分析
-        elif any(k in q for k in ["时段", "小时", "每时", "24小时分布", "峰谷"]):
-            plan["aggregation"] = "time_of_day"
-            plan["data_source"] = "energy"
-            plan["chart"] = {"type": "line", "title": "24小时能耗分布"}
-
-        # 按区域（注意 "各区域" 含 "各区" 子串，需要排除）
-        elif "按区域" in q or "按区" in q or ("各区" in q and "各区域" not in q):
-            if plan["data_source"] == "energy":
-                plan["aggregation"] = "energy_by_geozone"
-                plan["chart"] = {"type": chart_style, "title": "各区域能耗对比"}
-            elif plan["data_source"] == "faults":
-                plan["aggregation"] = "faults_by_geozone"
-                plan["chart"] = {"type": chart_style, "title": "各区域故障数量对比"}
-            else:
-                plan["aggregation"] = "count_by_geozone"
-                plan["chart"] = {"type": chart_style, "title": "按区域设备数量分布"}
-
-        elif any(k in q for k in ["按状态", "状态分布", "状态统计"]):
-            plan["aggregation"] = "count_by_status"
-            plan["chart"] = {"type": chart_style if chart_style in ("pie", "donut") else "pie", "title": "设备状态分布"}
-
-        elif any(k in q for k in ["按类型", "类型分布", "类型统计"]):
-            plan["aggregation"] = "count_by_type"
-            plan["chart"] = {"type": chart_style if chart_style in ("pie", "donut") else "pie", "title": "设备类型分布"}
-
-        elif any(k in q for k in ["按故障类型", "故障类型分布", "故障统计"]):
-            plan["aggregation"] = "faults_by_type"
-            plan["chart"] = {"type": chart_style if chart_style in ("pie", "donut") else "pie", "title": "故障类型分布"}
-            plan["data_source"] = "faults"
-
-        elif any(k in q for k in ["趋势", "变化", "走势", "历史"]):
-            plan["aggregation"] = "trend"
-            plan["chart"] = {"type": "line", "title": "趋势分析"}
-            if plan["data_source"] == "devices":
-                plan["data_source"] = "energy"
-
-        elif any(k in q for k in ["比较", "对比", "排名", "top", "最多", "最少"]):
-            plan["aggregation"] = "compare"
-            if plan["data_source"] == "energy":
-                plan["compare_field"] = "energy_kwh"
-                plan["chart"] = {"type": chart_style if chart_style == "horizontal_bar" else "bar", "title": "能耗对比排名"}
-            elif plan["data_source"] == "faults":
-                plan["compare_field"] = "fault_count"
-                plan["chart"] = {"type": chart_style if chart_style == "horizontal_bar" else "bar", "title": "故障对比排名"}
-            else:
-                plan["compare_field"] = "device_count"
-                plan["chart"] = {"type": chart_style if chart_style == "horizontal_bar" else "bar", "title": "设备数量对比"}
-
-        # --- 定制分组（按 XX 统计）优先于通用汇总 ---
-        custom_group_map = {
-            "街道": "street_name",
-            "路段": "street_name",
-            "状态": "status",
-            "类型": "device_type",
-            "设备类型": "device_type",
-            "分组": "businessGroupName",
-            "区域": "businessGroupName",
-            "功率": "wattage",
-            "瓦数": "wattage",
-            "安装日期": "install_date",
-        }
-        group_match = re.search(r'(?:按|根据|以)\s*(\S+)', query)
-        if group_match:
-            dim = group_match.group(1)
-            # 去掉末尾的 统计/汇总/分组/排序/排列
-            for sfx in ["统计", "汇总", "分组", "排序", "排列"]:
-                if dim.endswith(sfx):
-                    dim = dim[:-len(sfx)]
-                    break
-            col = custom_group_map.get(dim)
-            if col:
-                plan["aggregation"] = "custom_group"
-                plan["group_column"] = col
-                plan["group_dim"] = dim
-
-        elif any(k in q for k in ["汇总", "统计", "总数", "分布"]):
-            if plan["data_source"] == "energy":
-                plan["aggregation"] = "energy_summary"
-            elif plan["data_source"] == "faults":
-                plan["aggregation"] = "fault_summary"
-            else:
-                plan["aggregation"] = "count_by_geozone"
-                plan["chart"] = {"type": chart_style, "title": "设备分布统计"}
-
-        # --- 排序 ---
-        if any(k in q for k in ["排序", "排名", "top", "最多", "最高"]):
-            plan["sort"] = True
-            plan["sort_desc"] = "最少" not in q and "最低" not in q
-            if plan["data_source"] == "energy":
-                plan["sort_field"] = "energy_kwh"
-            elif plan["data_source"] == "faults":
-                plan["sort_field"] = "fault_count"
-            else:
-                plan["sort_field"] = "device_count"
-
-        return plan
+        fallback = {"data_source": "devices", "filters": {},
+                   "aggregation": None, "group_column": None,
+                   "group_dim": None, "chart": None,
+                   "sort": False, "sort_desc": True, "includes_location": False}
+        return fallback
 
     async def _get_all_faults_for_chart(self, plan: dict) -> list[dict]:
         """从 devices_fault 获取所有故障记录用于图表聚合"""
