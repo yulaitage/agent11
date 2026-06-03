@@ -137,20 +137,18 @@ class Tunnel:
         # 1. 从相关实体获取信息
         if entity_ids:
             for entity_id in entity_ids[:5]:  # 最多 5 个实体
-                for room_name in ["memory_infra_devices", "memory_learning_patterns", "memory_convers_episodes"]:
+                for room_name in ["room_devices", "room_patterns", "room_episodes"]:
                     room = get_room(room_name)
                     if room:
                         drawer = Drawer(room, entity_id)
                         entity = await drawer.retrieve()
 
-                        if entity:
-                            context_parts.append(f"## {room_name.replace('memory_', '')}: {entity_id}")
-                            context_parts.append(f"- 类型: {entity.get('entity_type', 'unknown')}")
-
-                            if entity.get("data", {}).get("learned_facts"):
-                                facts = entity["data"]["learned_facts"][-3:]  # 最近 3 个
-                                for fact in facts:
-                                    context_parts.append(f"- 事实: {fact.get('fact', '')}")
+                        if entity and isinstance(entity, dict):
+                            context_parts.append(f"## {room_name.replace('room_', '')}: {entity_id}")
+                            # 提取存储的事实内容
+                            fact = entity.get("fact") or (entity.get("data") or {}).get("fact", "")
+                            if fact:
+                                context_parts.append(f"- 事实: {fact}")
 
         # 2. 使用 Tunnels 搜索相关模式
         if entity_ids and entity_ids[0]:

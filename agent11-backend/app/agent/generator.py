@@ -394,7 +394,7 @@ class AgentGenerator:
             if start != -1 and end != -1:
                 result = json.loads(cleaned[start:end+1])
                 if result.get("fixed_code") and result.get("analysis") != "无法确定":
-                    success = self.skill_registry.reload_skill(skill)
+                    success = await self.skill_registry.reload_skill(skill)
                     if success:
                         logger.info("skill_improved", skill=skill,
                                     fix=result.get("fix_description", ""))

@@ -30,8 +30,10 @@ from app.harness.autonomous import AutonomousLoops
 from app.memory.palace import MemoryPalace
 from app.observability.metrics import MetricsCollector
 from app.middleware.logging import APILoggingMiddleware
+import structlog
 
 settings = get_settings()
+logger = structlog.get_logger()
 
 
 @asynccontextmanager
@@ -50,7 +52,8 @@ async def lifespan(app: FastAPI):
     await EvalHarness.initialize()
     await LoopOperator.start()
     await AutonomousLoops.start()
-    await MemoryPalace.initialize()
+    # MemoryPalace 已在 AgentGenerator.initialize() 中初始化
+    logger.info("memory_palace_ready", instance=id(MemoryPalace.get_instance()))
 
     # Register metrics collector
     MetricsCollector.register_default_metrics()

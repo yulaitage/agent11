@@ -126,14 +126,12 @@ class FlexibleSkill(BaseSkill):
                     "group_dim": None, "chart": None,
                     "sort": False, "sort_desc": True, "includes_location": False,
                 }
-                print(f"[FlexibleSkill] LLM plan: {plan}")
+                logger.info("llm_plan_generated: %s", plan)
                 for k, v in defaults.items():
                     plan.setdefault(k, v)
                 return plan
         except Exception as e:
-            print(f"[FlexibleSkill] plan_query failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.warning("plan_query_failed", error=str(e))
 
         fallback = {"data_source": "devices", "filters": {},
                    "aggregation": None, "group_column": None,

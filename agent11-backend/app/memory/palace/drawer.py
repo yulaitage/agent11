@@ -110,8 +110,13 @@ class Drawer:
         if not doc:
             return []
 
-        facts = doc.get("data", {}).get("learned_facts", [])
-        return facts[-limit:] if len(facts) > limit else facts
+        # 从 data 字段中提取 fact，兼容新旧格式
+        data = doc.get("data", {})
+        if isinstance(data, dict):
+            fact_text = data.get("fact", "")
+            if fact_text:
+                return [{"fact": fact_text, "source": data.get("source", ""), "learned_at": data.get("learned_at", "")}]
+        return []
 
     async def archive(self) -> bool:
         """

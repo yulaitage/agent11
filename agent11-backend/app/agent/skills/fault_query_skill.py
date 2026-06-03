@@ -473,7 +473,7 @@ class FaultQuerySkill(BaseSkill):
 回答要简洁、友好。"""
 
         try:
-            response = llm.invoke(prompt, system=False, temperature=0.3)
+            response = await llm.invoke(prompt, system=False, temperature=0.3)
             # 清理 thinking 标签
             import re
             cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()

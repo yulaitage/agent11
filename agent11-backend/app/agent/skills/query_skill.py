@@ -163,7 +163,7 @@ class QuerySkill(BaseSkill):
 
         priority_keywords = list(dict.fromkeys(priority_keywords))[:30]
 
-        print(f"[DEBUG] Priority Keywords: {priority_keywords}")  # TODO: remove debug
+        logger.info("query_priority_keywords", keywords=priority_keywords)
 
         # 3. 预搜索：只搜索优先级关键词
         search_results = await self._search_keywords_in_database(priority_keywords, schema)
