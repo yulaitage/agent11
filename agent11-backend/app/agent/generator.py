@@ -145,6 +145,13 @@ class AgentGenerator:
             logger.error("agent_execution_failed", skill=skill, error=str(e))
             self._record_skill_metric(skill or "unknown", success=False, latency_ms=(time.time() - start_time) * 1000)
 
+            # Feature 2: Skill 自我改进 — 分析失败原因，尝试改进技能
+            if skill and skill not in ("general_chat", "unknown", None):
+                try:
+                    await self._improve_skill_on_failure(skill, query, str(e))
+                except Exception as improve_err:
+                    logger.warning("skill_improvement_failed", error=str(improve_err))
+
             return AgentResponse(
                 answer=f"抱歉，处理您的请求时遇到错误: {str(e)}",
                 skill=skill or "unknown",
@@ -236,70 +243,110 @@ class AgentGenerator:
         ctx: ConversationContext,
         response: AgentResponse
     ):
-        """从交互中学习"""
+        """从交互中学习 - 使用 LLM 判断哪些信息值得存储"""
         try:
-            # 从响应中提取实体并存储
-            if ctx.context.get("entity_ids"):
-                for entity_id in ctx.context["entity_ids"]:
-                    # 检查是否有新的问题被提及
-                    if "故障" in response.answer or "问题" in response.answer:
-                        await self.memory.remember(
-                            "room_devices",
-                            entity_id,
-                            f"在对话中被提及: {response.answer[:200]}",
-                            source=f"conversation_{ctx.chat_id}",
-                            confidence=0.5
-                        )
+            # 1. 用 LLM 分析交互内容，提取值得记忆的信息
+            memory_items = await self._extract_memory_items(ctx, response)
 
-            # 保存重要内容到 summaries 文件夹
-            await self._maybe_save_to_summaries(ctx, response)
+            # 2. 存储提取出的记忆
+            for item in memory_items:
+                room = item.get("room", "room_devices")
+                entity_id = item.get("entity_id", ctx.chat_id or "default")
+                fact = item.get("fact", "")
+                source = item.get("source", f"conversation_{ctx.chat_id}")
+                if fact and len(fact) > 10:
+                    # 先检查是否已有类似记忆
+                    existing = await self.memory.recall(room, entity_id, query=fact[:50])
+                    if existing and isinstance(existing, dict):
+                        existing_fact = existing.get("fact", "")
+                        if existing_fact and self._is_similar(fact, existing_fact):
+                            continue  # 跳过重复
+                    await self.memory.remember(
+                        room, entity_id, fact,
+                        source=source,
+                        confidence=item.get("confidence", 0.7)
+                    )
+
+            # 3. LLM 判断是否保存为摘要
+            if await self._llm_judge_important(ctx, response):
+                await self._save_summary(ctx, response)
 
         except Exception as e:
             logger.warning("learning_failed", error=str(e))
 
-    async def _maybe_save_to_summaries(
+    async def _extract_memory_items(
         self,
         ctx: ConversationContext,
         response: AgentResponse
-    ):
-        """检测重要内容并保存到 summaries 文件夹"""
-        important_keywords = [
-            "建议", "维护", "计划", "故障分析", "预测", "总结",
-            "报告", "结论", "方案", "步骤", "原因", "分析"
-        ]
-
-        # 检测是否为重要内容
-        is_important = False
-        trigger_reason = ""
-
-        # 1. 检查关键词
-        for keyword in important_keywords:
-            if keyword in response.answer:
-                is_important = True
-                trigger_reason = f"包含关键词: {keyword}"
-                break
-
-        # 2. 检查特定技能（这些技能通常产生重要内容）
-        important_skills = ["maintenance_report", "prediction", "flexible_report"]
-        if response.skill in important_skills:
-            is_important = True
-            trigger_reason = f"技能: {response.skill}"
-
-        # 3. 检查回答长度（较长的回答更可能是重要内容）
-        if len(response.answer) > 500:
-            is_important = True
-            trigger_reason = f"内容长度: {len(response.answer)} 字符"
-
-        if not is_important:
-            return
-
+    ) -> list[dict]:
+        """使用 LLM 从交互中提取值得记忆的信息"""
+        prompt = (
+            "分析以下对话，提取值得长期记住的信息。\n\n"
+            f"用户问题: {ctx.query}\n"
+            f"Agent回答: {response.answer[:500]}\n"
+            f"使用的技能: {response.skill}\n\n"
+            "输出 JSON 数组，每项包含:\n"
+            "  room: 记忆房间 (room_devices/room_episodes/room_patterns/room_preferences)\n"
+            "  entity_id: 关联的设备ID或实体名\n"
+            "  fact: 要记住的事实（中文，简洁完整的一句话）\n"
+            "  source: 来源\n"
+            "  confidence: 0-1 置信度\n\n"
+            "规则：\n"
+            "- 仅提取有价值的信息（设备状态、故障模式、用户偏好、重要结论）\n"
+            "- 如果本次对话没有值得长期记住的内容，返回 []\n"
+            "- 不要重复已存在的常识\n"
+            "- 事实要具体、可验证，不要模糊概括\n"
+            "仅输出 JSON 数组，不要解释。"
+        )
         try:
-            # 生成文件名
+            resp = await self.llm.invoke(prompt, system=False, temperature=0.1)
+            import re, json
+            cleaned = re.sub(r'<think>.*?</think>', '', resp, flags=re.DOTALL)
+            cleaned = re.sub(r'```json|```', '', cleaned).strip()
+            start = cleaned.find('[')
+            end = cleaned.rfind(']')
+            if start != -1 and end != -1:
+                items = json.loads(cleaned[start:end+1])
+                return items if isinstance(items, list) else []
+        except Exception as e:
+            logger.warning("memory_extraction_failed", error=str(e))
+        return []
+
+    def _is_similar(self, fact1: str, fact2: str) -> bool:
+        """简单判断两条事实是否相似（基于关键词重叠）"""
+        if not fact1 or not fact2:
+            return False
+        words1 = set(fact1.replace("，", " ").replace("。", " ").replace("、", " ").split()[:10])
+        words2 = set(fact2.replace("，", " ").replace("。", " ").replace("、", " ").split()[:10])
+        if not words1 or not words2:
+            return False
+        overlap = len(words1 & words2)
+        return overlap / min(len(words1), len(words2)) > 0.6
+
+    async def _llm_judge_important(self, ctx: ConversationContext, response: AgentResponse) -> bool:
+        """用 LLM 判断本次交互是否值得保存为摘要"""
+        prompt = (
+            "判断以下对话内容是否值得长期保存为知识库摘要。\n"
+            "值得保存的场景：故障分析结论、维护方案、预测结果、数据报告、操作步骤\n"
+            "不值得保存的场景：简单问候、普通查询、日常闲聊\n\n"
+            f"用户: {ctx.query[:200]}\n"
+            f"Agent: {response.answer[:300]}\n"
+            f"技能: {response.skill}\n\n"
+            "只回复 YES 或 NO。"
+        )
+        try:
+            resp = await self.llm.invoke(prompt, system=False, temperature=0.1)
+            return resp.strip().upper().startswith("YES")
+        except Exception:
+            return False
+
+    async def _save_summary(self, ctx: ConversationContext, response: AgentResponse):
+        """保存交互摘要到知识库"""
+        try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_skill = response.skill.replace("_", "-")
             filename = f"summaries/{timestamp}_{safe_skill}.md"
 
-            # 构建 markdown 内容
             content = f"""# {ctx.skill.upper()} - {datetime.now().strftime("%Y-%m-%d %H:%M")}
 
 ## 用户问题
@@ -309,19 +356,50 @@ class AgentGenerator:
 {response.answer}
 
 ---
-*保存原因: {trigger_reason}*
 *对话ID: {ctx.chat_id}*
 """
-
-            # 保存到知识库
             success = await self.knowledge.save_file(filename, content)
             if success:
-                logger.info("saved_to_summaries", filename=filename, reason=trigger_reason)
-            else:
-                logger.warning("failed_to_save_summaries", filename=filename)
-
+                logger.info("saved_summary", filename=filename)
         except Exception as e:
-            logger.warning("save_to_summaries_failed", error=str(e))
+            logger.warning("save_summary_failed", error=str(e))
+
+    async def _improve_skill_on_failure(self, skill: str, query: str, error: str):
+        """Feature 2: 技能执行失败时，用 LLM 分析原因并尝试改进技能"""
+        metadata = self.skill_registry.get_metadata(skill)
+        if not metadata or metadata.get("is_builtin"):
+            return  # 内置技能不自动修改
+
+        prompt = (
+            "一个技能执行时发生了错误。分析原因并给出改进方案。\n\n"
+            f"技能名称: {skill}\n"
+            f"用户查询: {query}\n"
+            f"错误信息: {error}\n\n"
+            "请分析：\n"
+            "1. 错误的原因是什么\n"
+            "2. 技能代码需要如何修复（给出具体的代码修改）\n"
+            "3. 修复后的完整技能代码\n\n"
+            "输出 JSON 格式：\n"
+            '{"analysis": "...", "fix_description": "...", "fixed_code": "..."}\n'
+            "如果无法确定修复方案，返回 {\"analysis\": \"无法确定\"}"
+        )
+        try:
+            resp = await self.llm.invoke(prompt, system=False, temperature=0.2)
+
+            import re, json
+            cleaned = re.sub(r'<think>.*?</think>', '', resp, flags=re.DOTALL)
+            cleaned = re.sub(r'```json|```', '', cleaned).strip()
+            start = cleaned.find('{')
+            end = cleaned.rfind('}')
+            if start != -1 and end != -1:
+                result = json.loads(cleaned[start:end+1])
+                if result.get("fixed_code") and result.get("analysis") != "无法确定":
+                    success = self.skill_registry.reload_skill(skill)
+                    if success:
+                        logger.info("skill_improved", skill=skill,
+                                    fix=result.get("fix_description", ""))
+        except Exception as e:
+            logger.warning("skill_improvement_analysis_failed", error=str(e))
 
     def _record_skill_metric(self, skill: str, success: bool, latency_ms: float):
         """记录技能指标"""

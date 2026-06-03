@@ -27,6 +27,7 @@ class SkillRegistry:
     def __init__(self):
         self._skills: dict[str, SkillFunc] = {}
         self._skill_metadata: dict[str, dict] = {}
+        self._lazy_skills: dict[str, str] = {}  # Feature 3: 延迟加载的技能代码
         self._register_default_skills()
         # Set as singleton instance
         SkillRegistry._instance = self
@@ -96,8 +97,22 @@ class SkillRegistry:
         return True
 
     def get(self, name: str) -> SkillFunc | None:
-        """获取技能函数"""
-        return self._skills.get(name)
+        """获取技能函数（支持延迟编译）"""
+        # 先检查是否已编译
+        func = self._skills.get(name)
+        if func:
+            return func
+
+        # Feature 3: 延迟编译 — 如果 metadata 存在但未编译，此时编译
+        code = self._lazy_skills.get(name)
+        if code:
+            func = self._compile_skill_code(code, name)
+            if func:
+                self._skills[name] = func
+                del self._lazy_skills[name]
+                return func
+
+        return None
 
     def get_metadata(self, name: str) -> dict | None:
         """获取技能元数据"""
@@ -136,17 +151,11 @@ class SkillRegistry:
             return 0
 
     async def load_skill(self, skill_def: dict) -> bool:
-        """动态加载技能代码"""
+        """动态加载技能代码（延迟编译，首次使用时才编译）"""
         name = skill_def["name"]
         code = skill_def["code"]
 
         try:
-            # 动态编译技能代码
-            skill_func = self._compile_skill_code(code, name)
-            if skill_func is None:
-                return False
-
-            # 注册技能
             metadata = {
                 "name": name,
                 "description": skill_def.get("description", ""),
@@ -156,7 +165,18 @@ class SkillRegistry:
                 "is_active": True,
             }
 
-            return self.register(name, skill_func, metadata)
+            # 仅编译验证语法，不保留编译结果
+            try:
+                compile(code, f"<skill_{name}>", "exec")
+            except SyntaxError as se:
+                logger.error("skill_syntax_error", skill=name, error=str(se))
+                return False
+
+            # 存储元数据和原始代码，延迟到首次 get() 时编译
+            self._skill_metadata[name] = metadata
+            self._lazy_skills[name] = code
+            logger.info("skill_registered_lazy", skill=name)
+            return True
 
         except Exception as e:
             logger.error("failed_to_load_skill", skill=name, error=str(e))
