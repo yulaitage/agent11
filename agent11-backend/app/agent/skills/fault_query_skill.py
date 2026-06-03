@@ -386,18 +386,21 @@ class FaultQuerySkill(BaseSkill):
             return []
 
     def _generate_answer(self, query: str, results: list, filters: dict) -> str:
-        """生成自然语言回答"""
+        """生成自然语言回答（自动匹配语言）"""
+        is_en = not bool(re.search(r'[一-鿿]', query))
+
         if not results:
-            return "未找到匹配的故障记录。"
+            return "No matching fault records found." if is_en else "未找到匹配的故障记录。"
 
         count = len(results)
         parts = []
 
         # 分组信息
         if filters.get("group"):
-            parts.append(f"分组{filters['group']}")
+            label = "Group" if is_en else "分组"
+            parts.append(f"{label}{filters['group']}")
         elif filters.get("group_path"):
-            parts.append(f"分组路径 {filters['group_path']}")
+            parts.append(f"Group path {filters['group_path']}")
 
         # 故障类型
         if filters.get("fault_type_cn"):
@@ -405,32 +408,30 @@ class FaultQuerySkill(BaseSkill):
 
         # 时间信息
         if filters.get("date"):
-            parts.append(f"在 {filters['date']}")
+            parts.append(f"on {filters['date']}" if is_en else f"在 {filters['date']}")
 
-        base = "".join(parts) if parts else "相关"
+        base = "".join(parts) if parts else ("related" if is_en else "相关")
 
-        # 避免 "电表故障故障记录" 这种重复
-        if filters.get("fault_type_cn"):
-            if base.endswith("故障"):
-                lines = [f"找到 {count} 条{base}记录：\n"]
-            else:
-                lines = [f"找到 {count} 条{base}故障记录：\n"]
+        if filters.get("fault_type_cn") and base.endswith("故障"):
+            lines = [f"Found {count} {base} records:\n" if is_en else f"找到 {count} 条{base}记录：\n"]
         else:
-            lines = [f"找到 {count} 条{base}故障记录：\n"]
+            suffix = " fault records" if is_en else "故障记录"
+            lines = [f"Found {count} {base}{suffix}:\n" if is_en else f"找到 {count} 条{base}{suffix}：\n"]
 
         # 显示前几条记录
         for r in results[:5]:
             device_id = r.get("device_id", "N/A")
-            fault = r.get("fault", "未知")
+            fault = r.get("fault", "unknown")
             fault_cn = self.FAULT_TYPE_REVERSE_MAP.get(fault, fault)
             group_name = r.get("businessGroupName", "")
             start_date = r.get("start_date", "")
             if isinstance(start_date, datetime):
                 start_date = start_date.strftime("%Y-%m-%d %H:%M")
-            lines.append(f"- 设备{device_id}: {fault_cn} ({group_name}, {start_date})")
+            lines.append(f"- Device {device_id}: {fault_cn} ({group_name}, {start_date})" if is_en else f"- 设备{device_id}: {fault_cn} ({group_name}, {start_date})")
 
         if count > 5:
-            lines.append(f"\n... 还有 {count - 5} 条记录")
+            remaining = count - 5
+            lines.append(f"\n... {remaining} more records" if is_en else f"\n... 还有 {remaining} 条记录")
 
         return "\n".join(lines)
 
@@ -459,18 +460,20 @@ class FaultQuerySkill(BaseSkill):
         group_list = ", ".join(groups.values()) if groups else "未知"
         fault_type = filters.get("fault_type_cn", "相关")
 
-        prompt = f"""用户查询: {query}
-查询条件: {fault_type}
-结果: 在指定分组({filters.get('group', '?')})未找到匹配记录
+        # 自动匹配用户语言
+        lang = "English" if not re.search(r'[一-鿿]', query) else "Chinese"
+        prompt = f"""User query: {query}
+Query conditions: {fault_type}
+Result: No matching records found for the specified group ({filters.get('group', '?')})
 
-系统实际包含以下分组的数据: {group_list}
+Groups that actually have this data: {group_list}
 
-请用中文、自然语言回答用户，说明:
-1. 用户查询的{fault_type}在分组{filters.get('group', '?')}没有记录
-2. 该{fault_type}仅存在于以下分组: {group_list}
-3. 建议用户查询这些分组
+Respond in {lang}. Explain:
+1. No {fault_type} records were found for group {filters.get('group', '?')}
+2. The {fault_type} only exists in these groups: {group_list}
+3. Suggest the user query these groups
 
-回答要简洁、友好。"""
+Be concise and friendly."""
 
         try:
             response = await llm.invoke(prompt, system=False, temperature=0.3)

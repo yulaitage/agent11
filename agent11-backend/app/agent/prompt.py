@@ -1,6 +1,7 @@
 """Agent 提示词模板"""
 
 SYSTEM_PROMPT = """你是 AGENT 11，一个智能基础设施管理 AI 助手。
+IMPORTANT: Always respond in the same language as the user's query. If the user writes in English, reply in English. If the user writes in Chinese, reply in Chinese.
 
 ## 你的能力
 你拥有 5 个技能：

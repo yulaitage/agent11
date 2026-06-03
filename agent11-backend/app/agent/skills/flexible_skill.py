@@ -13,15 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 class FlexibleSkill(BaseSkill):
-    """
-    Flexible 技能 - 灵活查询和报告（增强版）。
+    """Flexible 技能 - 灵活查询和报告"""
 
-    支持维度：
-    - 设备维度：按区域、类型、状态、年龄、健康度统计
-    - 能耗维度：按时间、区域聚合，支持趋势分析、时段分析
-    - 故障维度：按类型、时间、区域统计
-    - 图表类型：bar、pie、line、donut、horizontal_bar
-    """
+    @staticmethod
+    def _is_en(query: str) -> bool:
+        """检测查询是否为英文"""
+        return not bool(re.search(r'[一-鿿]', query))
 
     name = "flexible_report"
 
@@ -104,7 +101,11 @@ class FlexibleSkill(BaseSkill):
             '9. 涉及分组的 filter key: businessGroupName\n'
             '10. 涉及状态的 filter key: status\n'
             '11. 涉及设备类型的 filter key: device_type\n'
-            '12. data_source 仅能为 devices 或 energy，不能为 faults\n\n'
+            '12. data_source 仅能为 devices 或 energy，不能为 faults\n'
+            '13. English queries also work — extract filters the same way:\n'
+            '    "how many devices in group 10" -> filters: {"businessGroupName": "分组10"}\n'
+            '    "devices on 和平路" -> filters: {"street_name": "和平路"}\n'
+            '    "devices with status 1" -> filters: {"status": "1"}\n\n'
             f"用户问题: {query}"
         )
 
@@ -272,24 +273,32 @@ class FlexibleSkill(BaseSkill):
             col = plan.get("group_column", "")
             counts: dict[str, int] = {}
             for r in results:
-                val = str(r.get(col) or "其他")
+                val = str(r.get(col) or ("other" if self._is_en(query) else "其他"))
                 counts[val] = counts.get(val, 0) + 1
-            lines = [f"按{dim}统计（共 {count} 台设备）：\n"]
-            for k, v in sorted(counts.items(), key=lambda x: -x[1]):
-                lines.append(f"- {k}: {v}台")
+            if self._is_en(query):
+                lines = [f"By {dim} ({count} devices total):\n"]
+                for k, v in sorted(counts.items(), key=lambda x: -x[1]):
+                    lines.append(f"- {k}: {v}")
+            else:
+                lines = [f"按{dim}统计（共 {count} 台设备）：\n"]
+                for k, v in sorted(counts.items(), key=lambda x: -x[1]):
+                    lines.append(f"- {k}: {v}台")
             return "\n".join(lines)
 
         # 少于50台显示详细清单，超过50台则汇总统计
+        is_en = self._is_en(query)
         if count <= 50:
             sample = results[:20]
-            # 构建筛选描述
             flt = plan.get("filters", {})
             desc = ""
             if flt.get("street_name"):
                 desc += flt["street_name"]
             if flt.get("status"):
-                desc += f"状态{flt['status']}"
-            lines = [f"{desc}共 {count} 台设备：\n" if desc else f"找到 {count} 台设备：\n"]
+                desc += f" status {flt['status']}" if is_en else f"状态{flt['status']}"
+            if desc:
+                lines = [f"{desc}: {count} devices\n" if is_en else f"{desc}共 {count} 台设备：\n"]
+            else:
+                lines = [f"Found {count} devices:\n" if is_en else f"找到 {count} 台设备：\n"]
             for r in sample:
                 did = r.get("device_id") or r.get("deviceId", "N/A")
                 name = r.get("device_name") or r.get("deviceName", "")
@@ -299,13 +308,14 @@ class FlexibleSkill(BaseSkill):
                 parts = [p for p in parts if p]
                 lines.append(f"- {' | '.join(parts)}")
             if count > 20:
-                lines.append(f"\n... 还有 {count - 20} 台设备")
-            # 如果有筛选条件（已按特定维度查询），不显示定制提示
+                lines.append(f"\n... {count - 20} more" if is_en else f"\n... 还有 {count - 20} 台设备")
             if not plan.get("filters"):
-                lines.append("\n💡 如需定制统计表格，请告诉我统计维度（如按街道统计、按状态统计）")
+                tip = "\n💡 Ask to customize (e.g. 'group by street' or 'by status')" if is_en else "\n💡 如需定制统计表格，请告诉我统计维度（如按街道统计、按状态统计）"
+                lines.append(tip)
             return "\n".join(lines)
 
         # 超过50台：汇总统计（按状态、类型、分组）
+        is_en = self._is_en(query)
         statuses: dict[str, int] = {}
         types: dict[str, int] = {}
         groups: dict[str, int] = {}
@@ -314,13 +324,19 @@ class FlexibleSkill(BaseSkill):
             statuses[s] = statuses.get(s, 0) + 1
             t = r.get("device_type") or "unknown"
             types[t] = types.get(t, 0) + 1
-            g = r.get("businessGroupName") or "其他"
+            g = r.get("businessGroupName") or ("other" if is_en else "其他")
             groups[g] = groups.get(g, 0) + 1
 
-        lines = [f"共找到 {count} 台设备\n"]
-        lines.append(f"■ 按状态：{' | '.join([f'{k} {v}台' for k, v in sorted(statuses.items(), key=lambda x: -x[1])])}")
-        lines.append(f"■ 按类型：{' | '.join([f'{k} {v}台' for k, v in sorted(types.items(), key=lambda x: -x[1])])}")
-        lines.append(f"■ 按分组：{' | '.join([f'{k} {v}台' for k, v in sorted(groups.items(), key=lambda x: -x[1])])}")
+        if is_en:
+            lines = [f"Total {count} devices\n"]
+            lines.append(f"■ By status: {' | '.join([f'{k} {v}' for k, v in sorted(statuses.items(), key=lambda x: -x[1])])}")
+            lines.append(f"■ By type: {' | '.join([f'{k} {v}' for k, v in sorted(types.items(), key=lambda x: -x[1])])}")
+            lines.append(f"■ By group: {' | '.join([f'{k} {v}' for k, v in sorted(groups.items(), key=lambda x: -x[1])])}")
+        else:
+            lines = [f"共找到 {count} 台设备\n"]
+            lines.append(f"■ 按状态：{' | '.join([f'{k} {v}台' for k, v in sorted(statuses.items(), key=lambda x: -x[1])])}")
+            lines.append(f"■ 按类型：{' | '.join([f'{k} {v}台' for k, v in sorted(types.items(), key=lambda x: -x[1])])}")
+            lines.append(f"■ 按分组：{' | '.join([f'{k} {v}台' for k, v in sorted(groups.items(), key=lambda x: -x[1])])}")
         return "\n".join(lines)
 
     def _build_chart(self, base: dict, plan: dict) -> dict:
