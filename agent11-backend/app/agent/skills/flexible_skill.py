@@ -49,6 +49,8 @@ class FlexibleSkill(BaseSkill):
             ("执行查询", f"获取 {len(results)} 条结果", "查询完成")
         ]))
 
+        is_en = self._is_en(query)
+        query_plan["is_en"] = is_en
         answer = await self._generate_flexible_answer(query, results, query_plan, llm)
         data = self._generate_data_output(results, query_plan)
 
@@ -690,10 +692,11 @@ class FlexibleSkill(BaseSkill):
 
         # ---------- 默认输出 ----------
         count = len(results)
+        is_en_tbl = plan.get("is_en", False)
 
         # 少于50台显示详细清单，超过50台则汇总统计
         if count <= 50:
-            headers = ["设备ID", "设备名称", "设备类型", "分组", "街道", "状态", "纬度", "经度"]
+            headers = ["Device ID", "Name", "Type", "Group", "Street", "Status", "Lat", "Lng"] if is_en_tbl else ["设备ID", "设备名称", "设备类型", "分组", "街道", "状态", "纬度", "经度"]
             rows = []
             for r in results[:100]:
                 rows.append([
@@ -716,17 +719,27 @@ class FlexibleSkill(BaseSkill):
                 statuses[s] = statuses.get(s, 0) + 1
                 t = r.get("device_type") or "unknown"
                 types[t] = types.get(t, 0) + 1
-                g = r.get("businessGroupName") or "其他"
+                g = r.get("businessGroupName") or ("other" if is_en_tbl else "其他")
                 groups[g] = groups.get(g, 0) + 1
 
-            headers = ["统计维度", "分类", "数量"]
-            rows = []
-            for k, v in sorted(statuses.items(), key=lambda x: -x[1]):
-                rows.append(["按状态", k, str(v)])
-            for k, v in sorted(types.items(), key=lambda x: -x[1]):
-                rows.append(["按类型", k, str(v)])
-            for k, v in sorted(groups.items(), key=lambda x: -x[1]):
-                rows.append(["按分组", k, str(v)])
+            if is_en_tbl:
+                headers = ["Dimension", "Category", "Count"]
+                rows = []
+                for k, v in sorted(statuses.items(), key=lambda x: -x[1]):
+                    rows.append(["By status", k, str(v)])
+                for k, v in sorted(types.items(), key=lambda x: -x[1]):
+                    rows.append(["By type", k, str(v)])
+                for k, v in sorted(groups.items(), key=lambda x: -x[1]):
+                    rows.append(["By group", k, str(v)])
+            else:
+                headers = ["统计维度", "分类", "数量"]
+                rows = []
+                for k, v in sorted(statuses.items(), key=lambda x: -x[1]):
+                    rows.append(["按状态", k, str(v)])
+                for k, v in sorted(types.items(), key=lambda x: -x[1]):
+                    rows.append(["按类型", k, str(v)])
+                for k, v in sorted(groups.items(), key=lambda x: -x[1]):
+                    rows.append(["按分组", k, str(v)])
 
         return {
             "table": {"headers": headers, "rows": rows, "total": len(results)}
