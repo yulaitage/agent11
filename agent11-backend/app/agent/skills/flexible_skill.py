@@ -1,4 +1,5 @@
 """Flexible 技能 - 灵活报告（增强版）"""
+import re
 from typing import Any
 from datetime import datetime, timedelta
 import logging
@@ -18,6 +19,7 @@ class FlexibleSkill(BaseSkill):
     @staticmethod
     def _is_en(query: str) -> bool:
         """检测查询是否为英文"""
+        import re
         return not bool(re.search(r'[一-鿿]', query))
 
     name = "flexible_report"
@@ -110,10 +112,9 @@ class FlexibleSkill(BaseSkill):
         )
 
         try:
-            import re, json
+            import json
             response = await llm.invoke(prompt, system=False, temperature=0.1)
             json_str = response.strip()
-            import re
             json_str = re.sub(r'<think>.*?</think>', '', json_str, flags=re.DOTALL)
             json_str = re.sub(r'```json|```', '', json_str).strip()
             start = json_str.find("{")
@@ -127,12 +128,12 @@ class FlexibleSkill(BaseSkill):
                     "group_dim": None, "chart": None,
                     "sort": False, "sort_desc": True, "includes_location": False,
                 }
-                logger.info("llm_plan_generated: %s", plan)
+                logger.info("llm_plan_generated: %s", str(plan)[:200])
                 for k, v in defaults.items():
                     plan.setdefault(k, v)
                 return plan
         except Exception as e:
-            logger.warning("plan_query_failed", error=str(e))
+            logger.warning("plan_query_failed: %s", e)
 
         fallback = {"data_source": "devices", "filters": {},
                    "aggregation": None, "group_column": None,
