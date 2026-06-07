@@ -1,4 +1,5 @@
 """Prediction 技能 - 预测（Prophet 时序预测引擎）"""
+import re
 from typing import Any
 from datetime import datetime, timedelta
 import logging
@@ -9,6 +10,7 @@ from app.db.repositories.device import DeviceRepository
 from app.db.repositories.fault import FaultRepository
 from app.db.repositories.reading import ReadingRepository
 from app.db.repositories.comm import CommRepository
+from app.db.postgres import Database
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,10 @@ class PredictionSkill(BaseSkill):
     """Prediction 技能 - 故障和能耗预测（Prophet 时序预测引擎）"""
 
     name = "prediction"
+
+    @staticmethod
+    def _is_en(query: str) -> bool:
+        return not bool(re.search(r'[一-鿿]', query))
 
     def __init__(self):
         super().__init__()
@@ -97,13 +103,17 @@ class PredictionSkill(BaseSkill):
             ("生成预测", f"识别 {len(high_risk_devices)} 个高风险设备", "预测完成")
         ]))
 
+        is_en_pred = self._is_en(query)
         answer = self._generate_failure_prediction_answer(
-            high_risk_devices, time_horizon, fault_trend
+            high_risk_devices, time_horizon, fault_trend, is_en_pred
         )
         avg_confidence = sum(d["risk_score"] for d in high_risk_devices) / len(high_risk_devices) if high_risk_devices else 0.5
 
+        table_h = (["Device ID", "Zone", "Risk Score", "Level", "Factors", "Recommendation"]
+                   if is_en_pred else
+                   ["设备ID", "区域", "风险评分", "风险等级", "主要因素", "建议措施"])
         table = {
-            "headers": ["设备ID", "区域", "风险评分", "风险等级", "主要因素", "建议措施"],
+            "headers": table_h,
             "rows": [
                 [
                     d["device_id"],
@@ -141,13 +151,19 @@ class PredictionSkill(BaseSkill):
         now = datetime.utcnow()
         start = now - timedelta(days=90)
 
-        faults = await FaultRepository.find_active(geozone=zone, limit=5000)
-        if not faults or len(faults) < 3:
+        try:
+            fault_rows = await Database.fetch(
+                "SELECT start_date FROM devices_fault WHERE start_date >= $1 ORDER BY start_date DESC LIMIT 5000",
+                start
+            )
+        except Exception:
+            fault_rows = []
+        if not fault_rows or len(fault_rows) < 3:
             return None
 
         daily_counts: dict[str, int] = {}
-        for f in faults:
-            ts = f.get("detected_at")
+        for r in fault_rows:
+            ts = r.get("start_date")
             if ts:
                 if isinstance(ts, str):
                     try:
@@ -216,11 +232,17 @@ class PredictionSkill(BaseSkill):
             risk_score = 0.0
 
             since_90d = now - timedelta(days=90)
-            recent_faults = await FaultRepository.find_by_device(device_id, limit=50)
-            fault_count_90d = sum(
-                1 for f in recent_faults
-                if f.get("detected_at") and f["detected_at"] >= since_90d
-            )
+            # Query devices_fault directly (fault_records table doesn't exist)
+            try:
+                fault_rows = await Database.fetch(
+                    'SELECT start_date FROM devices_fault WHERE "device_id"::text = $1 ORDER BY start_date DESC LIMIT 50',
+                    device_id
+                )
+                fault_count_90d = sum(1 for r in fault_rows if r.get("start_date") and r["start_date"] >= since_90d)
+                recent_faults = [dict(r) for r in fault_rows]
+            except Exception:
+                recent_faults = []
+                fault_count_90d = 0
             if fault_count_90d > 0:
                 risk_score += min(fault_count_90d * 0.12, 0.35)
                 factors.append(f"近90天故障 {fault_count_90d} 次")
@@ -371,55 +393,67 @@ class PredictionSkill(BaseSkill):
         }
 
     def _generate_failure_prediction_answer(
-        self, predictions: list[dict], time_horizon: str, fault_trend: dict | None = None
+        self, predictions: list[dict], time_horizon: str, fault_trend: dict | None = None,
+        is_en: bool = False
     ) -> str:
+        ht = {"24h": "24h", "7d": "7 days", "30d": "30 days"} if is_en else {"24h": "24小时", "7d": "7天", "30d": "30天"}
+        horizon_text = ht.get(time_horizon, time_horizon)
+
         if not predictions and not fault_trend:
-            horizon_text = {"24h": "24小时", "7d": "7天", "30d": "30天"}.get(time_horizon, time_horizon)
-            return f"在预测期间（未来{horizon_text}）未发现高风险设备。当前系统运行平稳。"
+            return f"No high-risk devices found in the prediction period (next {horizon_text}). System is running stable." if is_en else f"在预测期间（未来{horizon_text}）未发现高风险设备。当前系统运行平稳。"
 
-        horizon_text = {"24h": "24小时", "7d": "7天", "30d": "30天"}.get(time_horizon, time_horizon)
-
-        lines = [f"未来 {horizon_text} 故障风险预测结果：\n"]
+        lines = [f"🔮 **Failure Risk Prediction — Next {horizon_text}**\n" if is_en else f"🔮 **未来 {horizon_text} 故障风险预测结果：**\n"]
 
         if fault_trend:
             total = fault_trend.get("total_predicted", 0)
             daily_avg = fault_trend.get("recent_daily_avg", 0)
-            lines.append(f"系统级预测：预计未来{horizon_text}将发生约 {total} 次故障")
-            if daily_avg > 0:
-                delta = total / max(len(predictions), 1) if predictions else 0
-                lines.append(f"（近期日均 {daily_avg:.1f} 次故障）")
+            if is_en:
+                lines.append(f"📊 System-level: ~{total} failures expected in the next {horizon_text}")
+                if daily_avg > 0:
+                    lines.append(f"   (Recent daily average: {daily_avg:.1f} failures)")
+            else:
+                lines.append(f"系统级预测：预计未来{horizon_text}将发生约 {total} 次故障")
+                if daily_avg > 0:
+                    lines.append(f"（近期日均 {daily_avg:.1f} 次故障）")
             lines.append("")
 
         if predictions:
+            level_map = {"极高": "Critical", "高": "High", "中": "Medium", "低": "Low"}
             extreme = [p for p in predictions if p["risk_level"] == "极高"]
             high = [p for p in predictions if p["risk_level"] == "高"]
             medium = [p for p in predictions if p["risk_level"] == "中"]
             low = [p for p in predictions if p["risk_level"] == "低"]
 
-            lines.append(f"共评估 {len(predictions)} 台设备，风险分布如下：")
+            if is_en:
+                lines.append(f"📋 **Risk Assessment**: {len(predictions)} devices evaluated")
+            else:
+                lines.append(f"共评估 {len(predictions)} 台设备，风险分布如下：")
             if extreme:
-                lines.append(f"- 极高风险: {len(extreme)} 台")
+                lines.append(f"  🔴 Critical: {len(extreme)}" if is_en else f"- 极高风险: {len(extreme)} 台")
             if high:
-                lines.append(f"- 高风险: {len(high)} 台")
+                lines.append(f"  🟠 High: {len(high)}" if is_en else f"- 高风险: {len(high)} 台")
             if medium:
-                lines.append(f"- 中风险: {len(medium)} 台")
+                lines.append(f"  🟡 Medium: {len(medium)}" if is_en else f"- 中风险: {len(medium)} 台")
             if low:
-                lines.append(f"- 低风险: {len(low)} 台")
+                lines.append(f"  🟢 Low: {len(low)}" if is_en else f"- 低风险: {len(low)} 台")
             lines.append("")
 
             if extreme:
-                lines.append("极高风险设备（需立即关注）：")
+                lines.append("**🚨 Critical Risk Devices (Immediate action required):**" if is_en else "极高风险设备（需立即关注）：")
                 for p in extreme[:3]:
-                    lines.append(f"  - {p['device_id']} | 评分 {p['risk_score']:.0%}")
+                    factors = "; ".join(p.get("factors", [])[:2])
+                    lines.append(f"  • `{p['device_id']}` — Score {p['risk_score']:.0%} | {factors}" if is_en else f"  - {p['device_id']} | 评分 {p['risk_score']:.0%} | {factors}")
                 lines.append("")
 
             if high:
-                lines.append("高风险设备（建议48小时内处理）：")
+                lines.append("**⚠️ High Risk Devices (48h recommended):**" if is_en else "高风险设备（建议48小时内处理）：")
                 for p in high[:5]:
-                    lines.append(f"  - {p['device_id']} | 评分 {p['risk_score']:.0%}")
+                    factors = "; ".join(p.get("factors", [])[:2])
+                    lines.append(f"  • `{p['device_id']}` — Score {p['risk_score']:.0%} | {factors}" if is_en else f"  - {p['device_id']} | 评分 {p['risk_score']:.0%} | {factors}")
                 lines.append("")
 
-            lines.append("所有风险设备的详细信息和针对性建议请见下方表格。")
+            rec = "See the detailed table below for recommendations." if is_en else "所有风险设备的详细信息和针对性建议请见下方表格。"
+            lines.append(rec)
 
         return "\n".join(lines)
 
