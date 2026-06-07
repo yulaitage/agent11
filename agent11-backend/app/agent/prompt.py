@@ -73,9 +73,9 @@ SKILL_ROUTER_PROMPT = """你是技能路由专家。根据用户输入的语义�
 
 路由规则（按优先级从高到低）：
 1. 如果用户询问任何关于数据的问题（设备、故障、统计、能耗、状态、分组、温度过高、电表故障、停电等），选 smart_query
-2. 如果涉及"为什么"、"什么原因"、"诊断"、"排查"，选 troubleshoot
-3. 如果涉及"预测"、"未来趋势"、"风险"，选 prediction
-4. 如果涉及"报告"、"月报"、"年报"、"周报"，选 maintenance_report
+2. 如果涉及"为什么"、"什么原因"、"诊断"、"排查"、"troubleshoot"、"why"，选 troubleshoot
+3. 如果涉及"预测"、"未来趋势"、"风险"、"predict"、"forecast"、"trend"、"future"，选 prediction
+4. 如果涉及"报告"、"月报"、"年报"、"周报"、"report"、"maintenance report"，选 maintenance_report
 5. 如果只是问候、闲聊或非数据问题，选 general_chat
 
 smart_query 处理范围包括但不限于：

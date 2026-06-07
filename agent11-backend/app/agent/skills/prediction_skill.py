@@ -68,11 +68,12 @@ class PredictionSkill(BaseSkill):
             return await self._predict_failure(query, time_horizon, reasoning_chain)
 
     def _parse_time_horizon(self, query: str) -> str:
-        if "24小时" in query or "明天" in query or "1天" in query:
+        q = query.lower()
+        if any(k in q for k in ["24小时", "明天", "1天", "24h", "today", "tomorrow", "1 day", "next 24"]):
             return "24h"
-        elif "7天" in query or "下周" in query or "一周" in query:
+        if any(k in q for k in ["7天", "下周", "一周", "7d", "7 day", "next week", "next 7"]):
             return "7d"
-        elif "30天" in query or "下月" in query or "一个月" in query:
+        if any(k in q for k in ["30天", "下月", "一个月", "30d", "30 day", "next month"]):
             return "30d"
         return "24h"
 
