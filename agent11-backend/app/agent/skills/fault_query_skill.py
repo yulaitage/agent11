@@ -294,13 +294,22 @@ class FaultQuerySkill(BaseSkill):
                     filters["start_date"] = filters["date"]
                     filters["end_date"] = filters["date"]
 
-        # 提取时间范围（如 "本月", "上周", "本周"）
+        # 提取时间范围（如 "过去10小时", "本月", "上周"）
         time_range = None
-        if "本月" in query:
-            now = datetime.now()
+        now = datetime.now()
+        # 过去 X 小时/天/周/月
+        past_match = re.search(r'过去\s*(\d+)\s*小[时時]', query)
+        if past_match:
+            hours = int(past_match.group(1))
+            time_range = f"过去{hours}小时"
+            from datetime import timedelta
+            start = now - timedelta(hours=hours)
+            filters["start_date"] = start.strftime("%Y-%m-%d %H:%M:%S")
+            filters["end_date"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        elif "本月" in query:
             time_range = "本月"
             filters["start_date"] = f"{now.year}-{now.month:02d}-01"
-            filters["end_date"] = filters["date"] if "date" in filters else now.strftime("%Y-%m-%d")
+            filters["end_date"] = now.strftime("%Y-%m-%d")
         elif "上周" in query:
             time_range = "上周"
         elif "本周" in query:
@@ -337,22 +346,37 @@ class FaultQuerySkill(BaseSkill):
             conditions.append(f'"businessGroupId" = ${param_idx}')
             params.append(filters["group_id"])
 
-        # 日期条件 - 使用 TO_DATE 函数进行日期比较
+        # 日期条件 - 支持 DATE 和 DATETIME 两种格式
         if filters.get("start_date") and filters.get("end_date"):
-            param_idx = len(params) + 1
-            conditions.append(f"start_date >= TO_DATE(${param_idx}, 'YYYY-MM-DD')")
-            params.append(filters["start_date"])
-            param_idx = len(params) + 1
-            conditions.append(f"start_date < (TO_DATE(${param_idx}, 'YYYY-MM-DD') + interval '1 day')")
-            params.append(filters["end_date"])
+            sd = filters["start_date"]
+            ed = filters["end_date"]
+            # 如果包含时分秒，使用 TIMESTAMP 精确匹配
+            if ":" in sd:
+                conditions.append(f"start_date >= ${len(params) + 1}::timestamp")
+                params.append(sd)
+                conditions.append(f"start_date <= ${len(params) + 1}::timestamp")
+                params.append(ed)
+            else:
+                conditions.append(f"start_date >= TO_DATE(${len(params) + 1}, 'YYYY-MM-DD')")
+                params.append(sd)
+                conditions.append(f"start_date < (TO_DATE(${len(params) + 1}, 'YYYY-MM-DD') + interval '1 day')")
+                params.append(ed)
         elif filters.get("start_date"):
-            param_idx = len(params) + 1
-            conditions.append(f"start_date >= TO_DATE(${param_idx}, 'YYYY-MM-DD')")
-            params.append(filters["start_date"])
+            sd = filters["start_date"]
+            if ":" in sd:
+                conditions.append(f"start_date >= ${len(params) + 1}::timestamp")
+                params.append(sd)
+            else:
+                conditions.append(f"start_date >= TO_DATE(${len(params) + 1}, 'YYYY-MM-DD')")
+                params.append(sd)
         elif filters.get("end_date"):
-            param_idx = len(params) + 1
-            conditions.append(f"start_date < (TO_DATE(${param_idx}, 'YYYY-MM-DD') + interval '1 day')")
-            params.append(filters["end_date"])
+            ed = filters["end_date"]
+            if ":" in ed:
+                conditions.append(f"start_date <= ${len(params) + 1}::timestamp")
+                params.append(ed)
+            else:
+                conditions.append(f"start_date < (TO_DATE(${len(params) + 1}, 'YYYY-MM-DD') + interval '1 day')")
+                params.append(ed)
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
