@@ -512,7 +512,10 @@ class SmartQuerySkill(BaseSkill):
         # For simple count queries, use template directly (no LLM needed)
         aggs = plan.get("aggregations", [])
         if len(aggs) == 1 and aggs[0].get("function", "").upper() == "COUNT" and not plan.get("group_by"):
-            val = str(rows[0].get("total") or rows[0].get("count") or count)
+            raw = rows[0].get("total")
+            if raw is None:
+                raw = rows[0].get("count")
+            val = str(raw if raw is not None else count)
             desc = ""
             for f in plan.get("filters", []):
                 col = f.get("column", "")
