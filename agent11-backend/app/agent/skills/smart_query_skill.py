@@ -486,7 +486,7 @@ class SmartQuerySkill(BaseSkill):
     # ─── Phase 4: Answer Generation ─────────────────────────────
 
     async def _generate_answer(self, llm: Any, query: str, rows: list[dict], plan: dict) -> str:
-        """用 LLM 基于真实数据生成回答"""
+        """基于真实数据库结果生成回答（模板优先，LLM仅润色）"""
         if not rows:
             if plan.get("aggregations"):
                 return "0" if self._is_en(query) else "0 条记录"
@@ -495,7 +495,7 @@ class SmartQuerySkill(BaseSkill):
         is_en = self._is_en(query)
         count = len(rows)
 
-        # For simple count queries, format naturally
+        # For simple count queries, use template directly (no LLM needed)
         aggs = plan.get("aggregations", [])
         if len(aggs) == 1 and aggs[0].get("function", "").upper() == "COUNT" and not plan.get("group_by"):
             val = str(rows[0].get("total") or rows[0].get("count") or count)
@@ -509,8 +509,10 @@ class SmartQuerySkill(BaseSkill):
                     desc = f" in {v}" if is_en else f"（{v}）"
             return f"Found {val} records{desc}." if is_en else f"共 {val} 条{desc}记录。"
 
-        # Build markdown table for LLM
+        # For listing queries, build a data-first template + LLM polish
         headers = list(rows[0].keys()) if rows else []
+        factual_summary = f"Query returned {count} rows." if is_en else f"查询返回 {count} 条记录。"
+
         md_rows = [f"| {' | '.join(headers)} |"]
         md_rows.append(f"| {' | '.join(['---'] * len(headers))} |")
         for r in rows[:20]:
@@ -521,26 +523,29 @@ class SmartQuerySkill(BaseSkill):
 
         data_summary = "\n".join(md_rows)
 
+        # Strict prompt: LLM may only rephrase the data, not invent
         prompt = (
-            "You are AGENT 11, a smart infrastructure management AI assistant. "
-            "Generate a natural language answer based on REAL database query results.\n\n"
-            "Rules:\n"
-            "1. Base your answer STRICTLY on the provided data\n"
-            "2. Include specific numbers and examples from the data\n"
-            "3. If data has groups, summarize each group\n"
-            "4. Answer in the SAME language as the question\n"
-            "5. Keep it concise and direct\n"
-            "6. Do NOT mention SQL or technical details\n"
-            "7. If no results, say so and suggest what data IS available\n\n"
+            "You are AGENT 11. Rephrase the following database results naturally.\n\n"
+            "CRITICAL RULES:\n"
+            "- The factual data is BELOW. Do NOT change or invent any numbers.\n"
+            f"- The actual count is: {count}\n"
+            "- Answer in the SAME language as the question.\n"
+            "- If no results, simply say so.\n\n"
             f"User question: {query}\n\n"
-            f"Results ({count} rows):\n{data_summary}\n\n"
-            "Generate a natural language answer:"
+            f"Database results ({count} rows):\n{data_summary}\n\n"
+            "Rephrase naturally:"
         )
 
         try:
-            resp = await llm.invoke(prompt, system=False, temperature=0.3)
+            resp = await llm.invoke(prompt, system=False, temperature=0.2)
             cleaned = re.sub(r'<think>.*?</think>', '', resp, flags=re.DOTALL).strip()
-            return cleaned if cleaned else (f"Found {count} records." if is_en else f"找到 {count} 条记录。")
+            # Validate: LLM response must contain the actual count
+            if cleaned and str(count) in cleaned:
+                return cleaned
+            # If LLM hallucinated a different number, use the template
+            if is_en:
+                return f"Found {count} records. Details in the table below."
+            return f"共 {count} 条记录。详情见下方表格。"
         except Exception:
             return f"Found {count} records." if is_en else f"找到 {count} 条记录。"
 
