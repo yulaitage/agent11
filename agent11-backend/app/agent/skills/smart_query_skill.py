@@ -540,29 +540,47 @@ class SmartQuerySkill(BaseSkill):
 
         data_summary = "\n".join(md_rows)
 
-        # Strict prompt: LLM may only rephrase the data, not invent
+        # Build data summary with counts and breakdowns
+        data_summary = "\n".join(md_rows)
+        # Add summary statistics
+        summary_stats = []
+        tbl = plan.get("tables", ["?"])[0]
+        summary_stats.append(f"Table: {tbl}, Total rows: {count}")
+        # Count by first key column if available (gives distribution overview)
+        if headers and count > 0:
+            key_col = headers[0]
+            val_counts: dict[str, int] = {}
+            for r in rows:
+                v = str(r.get(key_col, "unknown"))
+                val_counts[v] = val_counts.get(v, 0) + 1
+            if len(val_counts) > 1 and len(val_counts) <= 15:
+                top = sorted(val_counts.items(), key=lambda x: -x[1])[:10]
+                summary_stats.append(f"Distribution by {key_col}: " + ", ".join([f"{k}={v}" for k, v in top]))
+        summary_text = "\n".join(summary_stats)
+
+        # Analytical prompt with rich data context
         prompt = (
-            "You are AGENT 11. Rephrase the following database results naturally.\n\n"
-            "CRITICAL RULES:\n"
-            "- The factual data is BELOW. Do NOT change or invent any numbers.\n"
-            f"- The actual count is: {count}\n"
-            "- Answer in the SAME language as the question.\n"
-            "- If no results, simply say so.\n\n"
+            "You are AGENT 11, a smart infrastructure data analyst. Analyze the database results below "
+            "and produce a clear, structured answer.\n\n"
+            "## CRITICAL RULES\n"
+            "1. All NUMBERS must come DIRECTLY from the data below — do not invent\n"
+            "2. Answer in the SAME language as the question\n"
+            "3. Structure your response with bullet points, sections, or tables as appropriate\n"
+            "4. Identify patterns, trends, and groupings in the data\n"
+            "5. If the question asks for ROOT CAUSES or REASONS, analyze patterns across columns\n"
+            "6. If the question asks for RECOMMENDATIONS, base them on observed data patterns\n"
+            "7. If data is empty, say so clearly\n\n"
+            "## DATABASE RESULTS\n"
+            f"{summary_text}\n\n"
+            f"Detailed data:\n{data_summary}\n\n"
             f"User question: {query}\n\n"
-            f"Database results ({count} rows):\n{data_summary}\n\n"
-            "Rephrase naturally:"
+            "Provide your analysis:"
         )
 
         try:
             resp = await llm.invoke(prompt, system=False, temperature=0.2)
             cleaned = re.sub(r'<think>.*?</think>', '', resp, flags=re.DOTALL).strip()
-            # Validate: LLM response must contain the actual count
-            if cleaned and str(count) in cleaned:
-                return cleaned
-            # If LLM hallucinated a different number, use the template
-            if is_en:
-                return f"Found {count} records. Details in the table below."
-            return f"共 {count} 条记录。详情见下方表格。"
+            return cleaned if cleaned else (f"Found {count} records." if is_en else f"找到 {count} 条记录。")
         except Exception:
             return f"Found {count} records." if is_en else f"找到 {count} 条记录。"
 
@@ -600,11 +618,19 @@ class SmartQuerySkill(BaseSkill):
             x_col = headers[0] if headers else ""
             y_col = headers[1] if len(headers) > 1 else ""
             if x_col and y_col:
+                values = []
+                for r in rows[:30]:
+                    try:
+                        values.append(float(r.get(y_col, 0) or 0))
+                    except (ValueError, TypeError):
+                        break
+                if len(values) < len(rows[:30]):
+                    values = []
                 result["chart"] = {
                     "type": chart.get("type", "bar"),
                     "title": chart.get("title", "Chart"),
-                    "labels": [str(r.get(x_col, "")) for r in rows[:30]],
-                    "values": [float(r.get(y_col, 0) or 0) for r in rows[:30]],
+                    "labels": [str(r.get(x_col, "")) for r in rows[:30]] if values else [],
+                    "values": values,
                     "unit": chart.get("unit", ""),
                 }
 
