@@ -43,6 +43,7 @@ class SmartQuerySkill(BaseSkill):
         context: ConversationContext
     ) -> dict[str, Any]:
         """执行智能查询"""
+        self._current_query = query
         reasoning_chain = []
 
         reasoning_chain.extend(await self._build_reasoning_chain([
@@ -356,6 +357,22 @@ class SmartQuerySkill(BaseSkill):
         primary = tables[0]
         params = []
 
+        # Server-side time range processing: override LLM date filters with concrete times
+        query = self._current_query if hasattr(self, '_current_query') else ""
+        if query:
+            past_match = re.search(r'(?:past|last|过去|最近)\s*(\d+)\s*(?:hour|小时|hr)', query.lower())
+            if past_match:
+                hours = int(past_match.group(1))
+                from datetime import datetime, timedelta
+                cutoff = datetime.utcnow() - timedelta(hours=hours)
+                # Add or override start_date filter with the concrete datetime
+                existing = [f for f in plan.get("filters", []) if f.get("column") in ("start_date", "end_date", "timestamp")]
+                # Remove ALL time-related filters from LLM plan, add our own
+                time_cols = {"start_date", "end_date", "timestamp", "created_at",
+                             "detected_at", "resolved_at", "install_date", "updated_at"}
+                plan["filters"] = [f for f in plan.get("filters", []) if f.get("column") not in time_cols]
+                plan["filters"].append({"column": "start_date", "operator": ">=", "value": cutoff})
+
         # SELECT
         cols = plan.get("columns", [])
         aggs = plan.get("aggregations", [])
@@ -404,7 +421,7 @@ class SmartQuerySkill(BaseSkill):
             # Convert date/datetime string values to datetime objects for asyncpg
             date_cols = {"start_date", "end_date", "timestamp", "install_date",
                          "last_maintenance", "created_at", "updated_at", "report_date",
-                         "detected_at", "resolved_at"}
+                         "detected_at", "resolved_at", "created_at"}
             if isinstance(val, str) and col in date_cols:
                 from datetime import datetime as _dt
                 parsed = None
