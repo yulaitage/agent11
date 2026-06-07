@@ -178,7 +178,17 @@ class SmartQuerySkill(BaseSkill):
     async def _plan_query(self, llm: Any, query: str, schema: dict, sample_vals: str) -> dict:
         """使用 LLM 生成查询计划"""
         schema_str = self._format_schema_for_llm(schema)
-        is_en = self._is_en(query)
+
+        # Explicit fault type values (complete list from devices_fault.fault)
+        fault_types = [
+            "supply_loss", "high_temperature", "meter_fault", "lamp_failure",
+            "lamp_power_too_high", "lamp_power_too_low", "dimming_failure",
+            "lamp_unexpected_on", "current_too_high", "current_too_low",
+            "power_factor_too_low", "relay_failure", "control_gear_comm_failure",
+            "cycling_failure", "supply_voltage_too_high", "supply_voltage_too_low",
+            "group_control_fault", "link_control_fault", "lux_communication_fault",
+            "high_load_power", "lux_module_fault",
+        ]
 
         prompt = (
             "You are a query planner for a smart infrastructure database. Given a user question and the database schema, "
@@ -187,11 +197,13 @@ class SmartQuerySkill(BaseSkill):
             f"## Sample Values from Database\n{sample_vals}\n\n"
             "## Available Tables and Their Purposes\n"
             "- devices_info: Device registry (device_id, device_name, device_type, status, location, group, street_name)\n"
-            "- devices_fault: Fault records (device_id, fault type value, group, start_date, end_date)\n"
+            "- devices_fault: Fault records (device_id, fault type, group, start_date, end_date)\n"
             "- devices_consumption: Consumption data by device (device_id, report_date, group, value)\n"
             "- groups_info: Group hierarchy (businessGroupId, businessGroupName, parentGroupId)\n"
             "- device_readings: Real-time readings (voltage, current, power, energy_kwh, timestamp)\n"
             "- energy_readings: Energy measurements per device/geozone/timestamp (energy_kwh)\n\n"
+            "## Fault Type Values (exact enum values in devices_fault.fault column)\n"
+            f"{', '.join(fault_types)}\n\n"
             '## Output Format — JSON ONLY, no explanation\n'
             '{\n'
             '  "tables": ["devices_info"],\n'
@@ -206,27 +218,33 @@ class SmartQuerySkill(BaseSkill):
             '}\n\n'
             "## Critical Rules\n"
             "1. Table and column names MUST exactly match the schema above\n"
-            "2. For fault type queries, filter on devices_fault.fault with the EXACT fault value (e.g. 'high_temperature', 'supply_loss', 'meter_fault')\n"
+            "2. For fault type queries, filter on devices_fault.fault with the EXACT fault value from the list above.\n"
+            "   'power failure'/'停电'/'断电' -> fault='supply_loss'\n"
+            "   'high temperature'/'温度过高'/'高温' -> fault='high_temperature'\n"
+            "   'meter fault'/'电表故障' -> fault='meter_fault'\n"
             "3. For 'group X' or '分组X', use businessGroupName='分组X'\n"
             "4. For time filters, output ISO 8601 dates (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)\n"
-            "5. '过去N小时' -> calculate explicit ISO datetime (current time minus N hours)\n"
-            "6. '2026年4月' -> '2026-04-01'\n"
+            "5. '过去N小时' -> calculate explicit ISO datetime like '2026-06-07 10:00:00'\n"
+            "6. NEVER use SQL expressions like 'now()' or 'INTERVAL' as filter values. Use concrete date strings only.\n"
+            "7. '2026年4月' -> '2026-04-01'\n"
             "7. When asking 'how many' / '多少个' / '统计', use COUNT aggregation\n"
             "8. GROUP BY when question asks 'by X' / 'per X' / 'each X' / '按X'\n"
             "9. For chart data, set chart: {\"type\": \"bar\"|\"line\"|\"pie\", \"title\": \"...\", \"unit\": \"...\"}\n"
             "10. The device_id in devices_fault is BIGINT, in devices_info it's VARCHAR\n"
             "11. Set reasonable LIMIT (default 100, max 200)\n"
-            "12. When no specific columns needed, use ['*']\n"
-            "13. Detect query language — respond in the same language as the question\n"
-            "14. Do NOT invent column names that don't exist in the schema\n\n"
+            "13. When no specific columns needed, use ['*']\n"
+            "14. Detect query language — respond in the same language as the question\n"
+            "15. Do NOT invent column names that don't exist in the schema\n\n"
             "Generate ONLY the JSON. No other text.\n\n"
             f"User question: {query}"
         )
 
         try:
             response = await llm.invoke(prompt, system=False, temperature=0.1)
+            logger.info("smart_query_llm_response", response=response[:500])
             plan = self._parse_json(response)
             if plan and isinstance(plan, dict):
+                logger.info("smart_query_plan_generated", plan=str(plan)[:300])
                 return plan
         except Exception as e:
             logger.warning("smart_query_plan_failed", error=str(e))
@@ -248,11 +266,25 @@ class SmartQuerySkill(BaseSkill):
         return None
 
     def _build_fallback_plan(self, query: str) -> dict:
-        """兜底查询计划"""
-        is_en = self._is_en(query)
+        """兜底查询计划 — 智能识别查询意图"""
+        q = query.lower()
+        # 故障查询
+        if any(k in q for k in ["故障", "fault", "停电", "power failure", "温度过高",
+                                "高温", "high temperature", "电表", "meter", "断电"]):
+            return {
+                "tables": ["devices_fault"],
+                "columns": [],
+                "aggregations": [{"function": "count", "column": "*", "alias": "total"}],
+                "group_by": [],
+                "order_by": [],
+                "limit": 1,
+                "joins": [],
+                "chart": None,
+            }
+        # 设备查询
         return {
             "tables": ["devices_info"],
-            "columns": ["device_id", "device_name", "device_type", "status", "businessGroupName"],
+            "columns": ["device_id", "device_name", "device_type", "status", "businessGroupName", "street_name"],
             "filters": [],
             "aggregations": [],
             "group_by": [],
@@ -323,7 +355,6 @@ class SmartQuerySkill(BaseSkill):
         tables = plan.get("tables", ["devices_info"])
         primary = tables[0]
         params = []
-        param_idx = 0
 
         # SELECT
         cols = plan.get("columns", [])
@@ -331,17 +362,19 @@ class SmartQuerySkill(BaseSkill):
         select_parts = []
 
         if aggs:
-            for agg in aggs:
-                param_idx += 1
+            for i, agg in enumerate(aggs):
                 func_name = agg.get("function", "COUNT").upper()
                 agg_col = agg.get("column", "*")
-                alias = agg.get("alias", f"{func_name.lower()}_{param_idx}")
+                alias = agg.get("alias", f"{func_name.lower()}_{i + 1}")
                 if agg_col == "*":
                     select_parts.append(f'{func_name}(*) AS "{alias}"')
                 else:
                     select_parts.append(f'{func_name}("{agg_col}") AS "{alias}"')
 
-        if cols and cols != ["*"]:
+        # When aggregations exist with columns but no GROUP BY, only use aggregations
+        if aggs and cols and not plan.get("group_by"):
+            pass  # Don't add non-aggregated columns
+        elif cols and cols != ["*"]:
             for c in cols:
                 select_parts.append(f'"{c}"')
         elif not aggs:
@@ -357,7 +390,7 @@ class SmartQuerySkill(BaseSkill):
             if jt and on:
                 from_clause += f' LEFT JOIN "{jt}" ON {on}'
 
-        # WHERE
+        # WHERE (use $N positional params for asyncpg)
         where_parts = []
         for f in plan.get("filters", []):
             col = f.get("column", "")
@@ -368,30 +401,47 @@ class SmartQuerySkill(BaseSkill):
             if val is None or col == "":
                 continue
 
-            param_idx += 1
+            # Convert date/datetime string values to datetime objects for asyncpg
+            date_cols = {"start_date", "end_date", "timestamp", "install_date",
+                         "last_maintenance", "created_at", "updated_at", "report_date",
+                         "detected_at", "resolved_at"}
+            if isinstance(val, str) and col in date_cols:
+                from datetime import datetime as _dt
+                parsed = None
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
+                    try:
+                        parsed = _dt.strptime(val, fmt)
+                        break
+                    except ValueError:
+                        continue
+                if parsed:
+                    val = parsed
+                else:
+                    # Invalid date string from LLM - skip this filter
+                    continue
 
-            if operator.upper() == "ILIKE" or operator.upper() == "LIKE":
-                where_parts.append(f'"{col}" {operator} ${param_idx}')
+            param_n = len(params) + 1
+
+            if operator.upper() in ("ILIKE", "LIKE"):
+                where_parts.append(f'"{col}" {operator} ${param_n}')
                 params.append(f"%{val}%")
             elif operator.upper() == "IN":
                 if isinstance(val, list):
-                    placeholders = ", ".join([f"${param_idx + i}" for i in range(len(val))])
-                    where_parts.append(f'"{col}" IN ({placeholders})')
+                    holders = ", ".join([f"${param_n + i}" for i in range(len(val))])
+                    where_parts.append(f'"{col}" IN ({holders})')
                     params.extend(val)
-                    param_idx += len(val) - 1
                 else:
-                    where_parts.append(f'"{col}" = ${param_idx}')
+                    where_parts.append(f'"{col}" = ${param_n}')
                     params.append(val)
             elif operator.upper() == "BETWEEN":
                 if isinstance(val, list) and len(val) == 2:
-                    where_parts.append(f'"{col}" BETWEEN ${param_idx} AND ${param_idx + 1}')
+                    where_parts.append(f'"{col}" BETWEEN ${param_n} AND ${param_n + 1}')
                     params.extend(val)
-                    param_idx += 1
                 else:
-                    where_parts.append(f'"{col}" >= ${param_idx}')
+                    where_parts.append(f'"{col}" >= ${param_n}')
                     params.append(val)
             else:
-                where_parts.append(f'"{col}" {operator} ${param_idx}')
+                where_parts.append(f'"{col}" {operator} ${param_n}')
                 params.append(val)
 
         where_clause = " AND ".join(where_parts) if where_parts else "TRUE"
@@ -417,9 +467,8 @@ class SmartQuerySkill(BaseSkill):
             order_clause = " ORDER BY " + ", ".join(order_parts)
 
         # LIMIT
-        param_idx += 1
         limit = plan.get("limit", self.DEFAULT_LIMIT)
-        limit_clause = f" LIMIT ${param_idx}"
+        limit_clause = f" LIMIT ${len(params) + 1}"
         params.append(limit)
 
         sql = f"SELECT {select_clause} FROM {from_clause} WHERE {where_clause}{group_clause}{order_clause}{limit_clause}"
@@ -446,11 +495,19 @@ class SmartQuerySkill(BaseSkill):
         is_en = self._is_en(query)
         count = len(rows)
 
-        # For simple count queries, just return the number
+        # For simple count queries, format naturally
         aggs = plan.get("aggregations", [])
         if len(aggs) == 1 and aggs[0].get("function", "").upper() == "COUNT" and not plan.get("group_by"):
-            val = rows[0].get("total") or rows[0].get("count") or count
-            return f"Total: {val}" if is_en else f"共 {val} 条"
+            val = str(rows[0].get("total") or rows[0].get("count") or count)
+            desc = ""
+            for f in plan.get("filters", []):
+                col = f.get("column", "")
+                v = f.get("value", "")
+                if "fault" in col:
+                    desc = f" of type '{v}'" if is_en else f"（{v}类型）"
+                elif "group" in col.lower():
+                    desc = f" in {v}" if is_en else f"（{v}）"
+            return f"Found {val} records{desc}." if is_en else f"共 {val} 条{desc}记录。"
 
         # Build markdown table for LLM
         headers = list(rows[0].keys()) if rows else []
