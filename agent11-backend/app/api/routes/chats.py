@@ -49,8 +49,8 @@ async def _llm_detect_skill_route(message: str, llm: LLMService) -> str | None:
         if ':' in skill:
             skill = skill.split(':')[-1].strip()
 
-        valid_skills = ["query", "troubleshoot", "prediction", "maintenance_report",
-                       "flexible_report", "fault_query", "general_chat"]
+        valid_skills = ["smart_query", "troubleshoot", "prediction", "maintenance_report",
+                       "general_chat"]
         if skill not in valid_skills:
             logger.warning("llm_routing_invalid_skill", response=response[:100], extracted=skill)
             return None
@@ -65,31 +65,17 @@ async def _llm_detect_skill_route(message: str, llm: LLMService) -> str | None:
 
 def _keyword_fallback_route(message: str) -> str | None:
     """关键词兜底路由：LLM 路由失败时的备选"""
-    # 故障类型关键词（来自 fault_query_skill.FAULT_TYPE_MAP）
-    fault_keywords = [
-        "温度过高", "高温", "过热",
-        "电表故障", "电表错误",
-        "灯具功率过高", "灯具功率过低", "灯具故障", "灯故障",
-        "调光故障", "灯具意外亮起",
-        "电流过高", "电流过低", "功率因数过低",
-        "继电器故障", "控制设备通信故障", "通信故障", "通信中断",
-        "停电", "断电", "供电中断",
-        "供电电压过高", "供电电压过低",
-        "高负载功率",
-        "光照通信故障", "光照模块故障",
-        "分组控制故障", "链路控制故障",
-        "循环故障", "周期性故障",
+    data_keywords = [
+        "设备", "路灯", "统计", "有多少", "能耗", "功率", "电压", "电流",
+        "故障", "温度过高", "高温", "停电", "断电", "过热",
+        "电表故障", "电表错误", "继电器", "通信故障", "灯具故障",
+        "分组", "区域", "街道", "状态", "列表", "列出",
+        "device", "fault", "energy", "power", "consumption",
+        "reading", "status", "group", "street", "meter", "temperature",
     ]
-    for kw in fault_keywords:
+    for kw in data_keywords:
         if kw in message:
-            return "fault_query"
-
-    # 设备查询关键词
-    device_keywords = ["设备", "路灯", "统计", "有多少"]
-    for kw in device_keywords:
-        if kw in message:
-            return "flexible_report"
-
+            return "smart_query"
     return None
 
 

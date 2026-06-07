@@ -65,42 +65,40 @@ IMPORTANT: Always respond in the same language as the user's query. If the user 
 SKILL_ROUTER_PROMPT = """你是技能路由专家。根据用户输入的语义意图，判断最合适的技能。
 
 技能列表：
-- query: 查询设备信息、统计数据、能耗数据
-- fault_query: 查询故障记录、筛选故障类型/分组/时间
+- smart_query: 全能数据查询 - 查询设备信息、故障记录、统计、能耗、分组，支持中英文
 - troubleshoot: 诊断故障原因、排查问题
 - prediction: 预测故障、能耗趋势
 - maintenance_report: 生成运维报告、周报月报
-- flexible_report: 数据分析、临时报表
 - general_chat: 闲聊、问候、一般问题
 
-分析步骤：
-1. 理解用户查询的核心意图
-2. 判断是否涉及"故障"查询（温度过高、电表故障、灯具故障、停电、高温等都属于故障类型）
-3. 如果涉及分组+时间+故障类型的组合查询，优先 fault_query
-4. 如果涉及"为什么"、"什么原因"、"诊断"，选 troubleshoot
-5. 如果涉及"预测"、"未来趋势"、"风险"，选 prediction
-6. 如果涉及"报告"、"月报"、"年报"，选 maintenance_report
-7. 如果涉及"分析"、"统计"、"导出数据"、"设备列表"、"列出设备"，选 flexible_report
-8. 如果只是问候或闲聊，选 general_chat
+路由规则（按优先级从高到低）：
+1. 如果用户询问任何关于数据的问题（设备、故障、统计、能耗、状态、分组、温度过高、电表故障、停电等），选 smart_query
+2. 如果涉及"为什么"、"什么原因"、"诊断"、"排查"，选 troubleshoot
+3. 如果涉及"预测"、"未来趋势"、"风险"，选 prediction
+4. 如果涉及"报告"、"月报"、"年报"、"周报"，选 maintenance_report
+5. 如果只是问候、闲聊或非数据问题，选 general_chat
 
-严格规则：
-- 如果用户询问任何关于"故障类型"（包括温度过高、电表故障、灯具故障、停电等）的具体问题，选 fault_query
-- 如果用户询问"2026年4月分组1有哪些故障"、"有哪些温度过高的"，选 fault_query
-- 如果用户询问"设备状态"、"设备列表"、"列出所有设备"、"查看设备"、"统计"、"所有设备"，选 flexible_report
-- 如果用户问"生成本月报告"，选 maintenance_report
-- 如果用户只是问候（你好、hi、hello），选 general_chat
+smart_query 处理范围包括但不限于：
+- "分组10有什么设备" / "how many devices in group 10"
+- "2026年4月分组1有哪些故障" / "faults in April 2026"
+- "温度过高的设备" / "high temperature faults"
+- "电表故障" / "meter faults"
+- "列出所有设备" / "list all devices"
+- "统计设备数量" / "count devices"
+- "按街道统计" / "group by street"
+- "过去10小时停电次数" / "power outages in last 10 hours"
+- "能耗数据" / "energy consumption"
+- "设备状态" / "device status"
 
 示例输出：
-输入: "2026年4月，分组10有哪些故障？" 输出: fault_query
+输入: "分组10有哪些设备" 输出: smart_query
+输入: "温度过高的设备" 输出: smart_query
+输入: "2026年4月分组10有哪些故障" 输出: smart_query
+输入: "how many devices" 输出: smart_query
 输入: "你好" 输出: general_chat
+输入: "为什么设备会故障" 输出: troubleshoot
 输入: "生成本月报告" 输出: maintenance_report
-输入: "查询设备状态" 输出: flexible_report
-输入: "列出所有设备" 输出: flexible_report
-输入: "查看设备列表" 输出: flexible_report
-输入: "分组10所有故障" 输出: fault_query
-输入: "温度过高的设备" 输出: fault_query
-输入: "有哪些温度过高的" 输出: fault_query
-输入: "电表故障" 输出: fault_query
+输入: "预测未来故障" 输出: prediction
 
 直接输出技能名称，不要解释。
 """

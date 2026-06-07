@@ -11,6 +11,7 @@ from app.agent.skills.troubleshoot_skill import TroubleshootSkill
 from app.agent.skills.prediction_skill import PredictionSkill
 from app.agent.skills.report_skill import ReportSkill
 from app.agent.skills.flexible_skill import FlexibleSkill
+from app.agent.skills.smart_query_skill import SmartQuerySkill
 from app.agent.skills.general_chat_skill import GeneralChatSkill
 from app.db.repositories.skill import SkillRepository
 
@@ -46,6 +47,7 @@ class SkillRegistry:
     def _register_default_skills(self):
         """注册默认内置技能"""
         default_skills = [
+            ("smart_query", SmartQuerySkill()),
             ("query", QuerySkill()),
             ("fault_query", FaultQuerySkill()),
             ("troubleshoot", TroubleshootSkill()),

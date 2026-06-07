@@ -171,7 +171,7 @@ class AgentGenerator:
             skill = response.strip().lower()
 
             # 验证技能名称
-            valid_skills = ["query", "troubleshoot", "prediction", "maintenance_report", "flexible_report", "general_chat"]
+            valid_skills = ["smart_query", "troubleshoot", "prediction", "maintenance_report", "general_chat"]
             if skill not in valid_skills:
                 skill = "general_chat"  # 默认走灵活回复
 
