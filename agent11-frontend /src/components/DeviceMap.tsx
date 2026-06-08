@@ -18,8 +18,8 @@ const STATUS_NAMES: Record<string, string> = {
 
 /** 高德地图瓦片 URL（中国可用，无需 API Key） */
 const AMAP_TILES = 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}'
-/** 离线/本地瓦片 URL（如用 TileServer 自建） */
-const LOCAL_TILES = '/tiles/{z}/{x}/{y}.png'
+/** 离线/本地瓦片 URL（通过后端 API 服务） */
+const LOCAL_TILES = '/api/tiles/{z}/{x}/{y}.png'
 
 function getTileUrl(): string {
   // 优先使用本地瓦片（离线部署），否则用高德在线瓦片
@@ -42,6 +42,7 @@ function createIcon(color: string): L.DivIcon {
 export default function DeviceMap({ mapData }: { mapData: MapData }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
+  const amapFallbackRef = useRef(false)
 
   const { center = [22.54, 114.06], zoom = 14, markers = [], legend } = mapData
 
@@ -55,16 +56,13 @@ export default function DeviceMap({ mapData }: { mapData: MapData }) {
       attributionControl: false,
     })
 
-    // Try local tiles first, fall back to Amap tiles
-    const tileLayer = L.tileLayer(getTileUrl(), {
-      maxZoom: 18,
-      errorTileUrl: '',
-    })
-    tileLayer.addTo(map)
-
-    // If local tiles fail (404), fall back to Amap tiles
-    tileLayer.on('tileerror', () => {
-      if (!mapRef.current) return
+    // 使用本地瓦片（后端服务 /api/tiles/）
+    const localTiles = L.tileLayer(getTileUrl(), { maxZoom: 18 })
+    localTiles.addTo(map)
+    // 如果本地瓦片 404，回退到高德在线瓦片
+    localTiles.on('tileerror', () => {
+      if (!mapRef.current || amapFallbackRef.current) return
+      amapFallbackRef.current = true
       L.tileLayer(AMAP_TILES, { maxZoom: 18 }).addTo(map)
     })
 
