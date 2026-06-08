@@ -1,6 +1,6 @@
 """API 路由"""
 from fastapi import APIRouter
-from app.api.routes import chats, knowledge, memory, reports, devices, health, llm, observability, skills, auth, protocols, models, import_excel, api_logs, search
+from app.api.routes import chats, knowledge, memory, reports, devices, health, llm, observability, skills, auth, protocols, models, import_excel, api_logs, search, tiles
 
 api_router = APIRouter()
 
@@ -19,3 +19,4 @@ api_router.include_router(models.router, prefix="/models", tags=["models"])
 api_router.include_router(import_excel.router, prefix="/import", tags=["import"])
 api_router.include_router(api_logs.router, prefix="/logs", tags=["logs"])
 api_router.include_router(search.router, prefix="", tags=["search"])
+api_router.include_router(tiles.router, prefix="", tags=["tiles"])

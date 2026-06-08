@@ -1,142 +1,134 @@
 import { useEffect, useRef } from 'react'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 import type { MapData } from '../api/chat'
 
 const STATUS_COLORS: Record<string, string> = {
   normal: '#22c55e',
-  warning: '#facc15',
+  warning: '#eab308',
   fault: '#ef4444',
   offline: '#6b7280',
   '1': '#22c55e',
   '0': '#ef4444',
 }
+const STATUS_NAMES: Record<string, string> = {
+  normal: 'Normal', warning: 'Warning', fault: 'Fault', offline: 'Offline',
+  '1': 'Normal', '0': 'Fault',
+}
 
-/** 简单的 Canvas 地图组件（无需外部依赖） */
+/** 高德地图瓦片 URL（中国可用，无需 API Key） */
+const AMAP_TILES = 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}'
+/** 离线/本地瓦片 URL（如用 TileServer 自建） */
+const LOCAL_TILES = '/tiles/{z}/{x}/{y}.png'
+
+function getTileUrl(): string {
+  // 优先使用本地瓦片（离线部署），否则用高德在线瓦片
+  return LOCAL_TILES
+}
+
+function createIcon(color: string): L.DivIcon {
+  return L.divIcon({
+    className: '',
+    html: `<div style="
+      width:16px;height:16px;border-radius:50%;
+      background:${color};border:2px solid #fff;
+      box-shadow:0 1px 4px rgba(0,0,0,0.3);
+    "></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+  })
+}
+
 export default function DeviceMap({ mapData }: { mapData: MapData }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<L.Map | null>(null)
 
-  const { center, zoom = 14, markers = [], legend } = mapData
+  const { center = [22.54, 114.06], zoom = 14, markers = [], legend } = mapData
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas || markers.length === 0) return
+    if (mapRef.current || !containerRef.current) return
 
-    const container = containerRef.current
-    if (!container) return
+    const map = L.map(containerRef.current, {
+      center: center as [number, number],
+      zoom,
+      zoomControl: true,
+      attributionControl: false,
+    })
 
-    const dpr = window.devicePixelRatio || 1
-    const rect = container.getBoundingClientRect()
-    canvas.width = rect.width * dpr
-    canvas.height = rect.height * dpr
-    canvas.style.width = rect.width + 'px'
-    canvas.style.height = rect.height + 'px'
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    // Try local tiles first, fall back to Amap tiles
+    const tileLayer = L.tileLayer(getTileUrl(), {
+      maxZoom: 18,
+      errorTileUrl: '',
+    })
+    tileLayer.addTo(map)
 
-    ctx.scale(dpr, dpr)
-    const w = rect.width
-    const h = rect.height
+    // If local tiles fail (404), fall back to Amap tiles
+    tileLayer.on('tileerror', () => {
+      if (!mapRef.current) return
+      L.tileLayer(AMAP_TILES, { maxZoom: 18 }).addTo(map)
+    })
 
-    // Background
-    ctx.fillStyle = '#f0f4f8'
-    ctx.fillRect(0, 0, w, h)
+    mapRef.current = map
 
-    // Grid lines
-    ctx.strokeStyle = '#e2e8f0'
-    ctx.lineWidth = 1
-    for (let x = 0; x < w; x += 40) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke()
+    return () => {
+      map.remove()
+      mapRef.current = null
     }
-    for (let y = 0; y < h; y += 40) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke()
-    }
+  }, [center, zoom])
+
+  // Update markers when data changes
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    // Clear existing markers
+    map.eachLayer((layer) => {
+      if (layer instanceof L.Marker) {
+        map.removeLayer(layer)
+      }
+    })
 
     if (markers.length === 0) return
 
-    // Calculate bounds
-    const lats = markers.map(m => m.lat)
-    const lngs = markers.map(m => m.lng)
-    const minLat = Math.min(...lats)
-    const maxLat = Math.max(...lats)
-    const minLng = Math.min(...lngs)
-    const maxLng = Math.max(...lngs)
+    const bounds = L.latLngBounds([])
+    const markerGroup = L.featureGroup()
 
-    const padding = 40
-    const mapW = w - padding * 2
-    const mapH = h - padding * 2
-    const latRange = maxLat - minLat || 1
-    const lngRange = maxLng - minLng || 1
-
-    const scale = Math.min(mapW / lngRange, mapH / latRange) * 0.8
-
-    const centerX = w / 2
-    const centerY = h / 2
-
-    function toScreen(lat: number, lng: number): [number, number] {
-      const x = centerX + (lng - (minLng + maxLng) / 2) * scale
-      const y = centerY - (lat - (minLat + maxLat) / 2) * scale
-      return [x, y]
-    }
-
-    // Draw markers
-    markers.forEach((marker) => {
-      const [x, y] = toScreen(marker.lat, marker.lng)
-      const color = STATUS_COLORS[marker.status] || '#3b82f6'
-      const radius = 8
-
-      // Glow
-      ctx.beginPath()
-      ctx.arc(x, y, radius + 3, 0, Math.PI * 2)
-      ctx.fillStyle = color + '30'
-      ctx.fill()
-
-      // Circle
-      ctx.beginPath()
-      ctx.arc(x, y, radius, 0, Math.PI * 2)
-      ctx.fillStyle = color
-      ctx.fill()
-      ctx.strokeStyle = '#fff'
-      ctx.lineWidth = 2
-      ctx.stroke()
-
-      // Label
-      ctx.fillStyle = '#1e293b'
-      ctx.font = '10px sans-serif'
-      ctx.textAlign = 'center'
-      ctx.fillText(marker.device_id.slice(-4), x, y + radius + 14)
+    markers.forEach((mk) => {
+      const color = STATUS_COLORS[mk.status] || '#3b82f6'
+      const statusName = STATUS_NAMES[mk.status] || mk.status
+      const popupContent = `
+        <div style="font-size:12px;line-height:1.5">
+          <b>${mk.popup || mk.device_id}</b><br/>
+          ID: ${mk.device_id}<br/>
+          Status: <span style="color:${color}">${statusName}</span><br/>
+          (${mk.lat.toFixed(4)}, ${mk.lng.toFixed(4)})
+        </div>
+      `
+      const marker = L.marker([mk.lat, mk.lng], { icon: createIcon(color) })
+        .bindPopup(popupContent)
+      markerGroup.addLayer(marker)
+      bounds.extend([mk.lat, mk.lng])
     })
 
-    // Legend
-    if (legend) {
-      let ly = 10
-      ctx.font = '11px sans-serif'
-      for (const [label, color] of Object.entries(legend)) {
-        ctx.fillStyle = color
-        ctx.fillRect(10, ly, 10, 10)
-        ctx.fillStyle = '#475569'
-        ctx.textAlign = 'left'
-        ctx.fillText(label, 24, ly + 9)
-        ly += 18
-      }
-    }
-  }, [markers, center, zoom])
+    markerGroup.addTo(map)
 
-  if (markers.length === 0) {
-    return (
-      <div className="mt-3 p-4 bg-slate-50 rounded-lg border border-slate-200 text-center text-sm text-slate-400">
-        No location data available
-      </div>
-    )
-  }
+    if (markers.length > 0) {
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: zoom })
+    }
+  }, [markers, zoom])
 
   return (
     <div className="mt-3">
-      <div ref={containerRef} className="w-full h-64 rounded-lg overflow-hidden border border-slate-200 relative">
-        <canvas ref={canvasRef} className="w-full h-full" />
-        <div className="absolute top-2 right-2 bg-white/90 rounded px-2 py-1 text-[10px] text-slate-500 shadow-sm">
-          {markers.length} device{markers.length > 1 ? 's' : ''}
-        </div>
+      <div className="flex items-center gap-3 mb-1.5 text-xs text-slate-500">
+        <span>📍 Device Locations ({markers.length})</span>
+        {legend && Object.entries(legend).map(([label, color]) => (
+          <span key={label} className="flex items-center gap-1">
+            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: color }} />
+            {label}
+          </span>
+        ))}
       </div>
+      <div ref={containerRef} className="w-full h-80 rounded-lg border border-slate-200 z-0" />
     </div>
   )
 }
