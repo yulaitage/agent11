@@ -113,7 +113,7 @@ class SmartQuerySkill(BaseSkill):
         # Phase 4: Generate answer
         answer = await self._generate_answer(llm, query, rows, plan)
         data = self._build_output_data(rows, plan)
-        map_data = self._generate_map_data(rows)
+        map_data = await self._generate_map_data(rows)
 
         return {
             "answer": answer,
@@ -636,13 +636,45 @@ class SmartQuerySkill(BaseSkill):
 
         return result
 
-    def _generate_map_data(self, rows: list[dict]) -> dict | None:
-        """生成地图数据（如果结果包含经纬度）"""
+    async def _generate_map_data(self, rows: list[dict]) -> dict | None:
+        """生成地图数据（自动补充坐标信息）"""
         if not rows:
             return None
+
+        # Try to extract lat/lng from result columns
         lat_key = next((k for k in ["latitude", "lat", "y"] if k in rows[0]), None)
         lng_key = next((k for k in ["longitude", "lng", "lon", "x"] if k in rows[0]), None)
+
+        # If lat/lng not in result, look up from database
         if not lat_key or not lng_key:
+            try:
+                device_ids = [str(r.get("device_id") or "") for r in rows if r.get("device_id")]
+                if device_ids:
+                    loc_rows = await Database.fetch(
+                        "SELECT device_id, latitude, longitude, status, device_name FROM devices_info "
+                        "WHERE device_id = ANY($1) AND latitude IS NOT NULL LIMIT 100",
+                        device_ids
+                    )
+                    if loc_rows:
+                        markers = []
+                        for r in loc_rows:
+                            lat = r["latitude"]
+                            lng = r["longitude"]
+                            if lat and lng:
+                                markers.append({
+                                    "device_id": str(r["device_id"]),
+                                    "lat": float(lat),
+                                    "lng": float(lng),
+                                    "status": str(r.get("status") or "normal"),
+                                    "popup": str(r.get("device_name") or r["device_id"]),
+                                })
+                        if markers:
+                            lats = [m["lat"] for m in markers]
+                            lngs = [m["lng"] for m in markers]
+                            return {"center": [sum(lats) / len(lats), sum(lngs) / len(lngs)],
+                                    "zoom": 14, "markers": markers}
+            except Exception as e:
+                logger.warning("map_data_lookup_failed", error=str(e))
             return None
 
         markers = []

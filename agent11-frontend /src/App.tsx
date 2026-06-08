@@ -21,6 +21,7 @@ import { chatApi, type ChatListItem, SkillType, Message } from './api/chat';
 import { exportChatToPdf, exportTableToPdf } from './utils/exportPdf';
 import { exportTableToExcel } from './utils/exportExcel';
 import FileUpload from './components/FileUpload';
+import DeviceMap from './components/DeviceMap';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import ModelingPage, { ModelingSidebar, ModelingHeaderExtras } from './components/ModelingPage';
@@ -687,6 +688,11 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
                               return null
                             })()}
                           </div>
+                        )}
+
+                        {/* Map rendering (device locations) */}
+                        {msg.role !== 'user' && (msg as any).map_data && (
+                          <DeviceMap mapData={(msg as any).map_data} />
                         )}
                       </div>
                     </div>
