@@ -10,6 +10,7 @@ import {
   Settings,
   LogOut,
   Send,
+  Mic,
   ChevronDown,
   Sparkles,
   Download,
@@ -49,6 +50,10 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   const [isLoadingChat, setIsLoadingChat] = useState(false);
   const [activeSkill, setActiveSkill] = useState<SkillType | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editChatTitle, setEditChatTitle] = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
@@ -105,6 +110,77 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
       setError('创建对话失败，请重试');
     }
   };
+
+  // ─── Voice Recording ───────────────────────────────
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      audioChunksRef.current = []
+      mediaRecorderRef.current = recorder
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop())
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        setIsVoiceProcessing(true)
+        try {
+          const formData = new FormData()
+          formData.append('file', blob, 'recording.webm')
+          const res = await fetch('/api/voice/stt', { method: 'POST', body: formData })
+          if (!res.ok) throw new Error('STT failed')
+          const data = await res.json()
+          if (data.text) {
+            setInputText(data.text)
+            // Auto-send after short delay
+            setTimeout(() => {
+              const input = document.querySelector<HTMLInputElement>('input[type="text"]')
+              if (input) { input.value = data.text; setInputText(data.text) }
+              handleSendRef.current?.()
+            }, 300)
+          }
+        } catch (err) {
+          console.error('Voice recognition failed:', err)
+          setError('语音识别失败，请重试')
+        } finally {
+          setIsVoiceProcessing(false)
+        }
+      }
+      recorder.start()
+      setIsRecording(true)
+    } catch (err) {
+      console.error('Mic access denied:', err)
+      setError('无法访问麦克风')
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+    }
+  }
+
+  // Ref for voice auto-send (initialized after handleSend)
+  const handleSendRef = useRef<() => void>(() => {})
+
+  // ─── TTS: speak assistant messages ──────────────────
+  const speakLastMessage = (text: string, lang: string) => {
+    if (!window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = lang  // 'zh-HK' for Cantonese, 'en-US' for English
+    utterance.rate = 1.0
+    utterance.pitch = 1.0
+    // Pick a voice matching language
+    const voices = window.speechSynthesis.getVoices()
+    const match = voices.find(v => v.lang.startsWith(lang.split('-')[0]))
+    if (match) utterance.voice = match
+    window.speechSynthesis.speak(utterance)
+  }
 
   const handleSend = async () => {
     setError(null);
@@ -185,6 +261,11 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
             return prev;
           });
           setIsLoading(false);
+          // TTS: speak the assistant response
+          if (message.content) {
+            const isEn = !/[一-鿿]/.test(message.content.slice(0, 20))
+            speakLastMessage(message.content, isEn ? 'en-US' : 'zh-HK')
+          }
         },
         // onError
         (error: string) => {
@@ -735,6 +816,14 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
             <div className="max-w-4xl mx-auto relative">
               <div className="absolute left-3 top-1/2 -translate-y-1/2 flex gap-1">
                 <FileUpload onUploadSuccess={(filename) => console.log('Uploaded:', filename)} />
+                <button
+                  onClick={isRecording ? stopRecording : startRecording}
+                  disabled={isVoiceProcessing}
+                  className={`p-2 rounded-xl transition-all ${isRecording ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'} disabled:opacity-50`}
+                  title={isRecording ? 'Stop recording' : 'Voice input'}
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
               </div>
               <input
                 type="text"
