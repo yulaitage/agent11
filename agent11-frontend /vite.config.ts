@@ -16,6 +16,10 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
+      https: {
+        key: './key.pem',
+        cert: './cert.pem',
+      },
       hmr: process.env.DISABLE_HMR !== 'true',
       proxy: {
         '/api': {
