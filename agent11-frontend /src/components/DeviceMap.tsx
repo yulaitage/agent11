@@ -16,15 +16,17 @@ const STATUS_NAMES: Record<string, string> = {
   '1': 'Normal', '0': 'Fault',
 }
 
-/** 高德地图瓦片 URL（中国可用，无需 API Key） */
-const AMAP_TILES = 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}'
-/** 离线/本地瓦片 URL（通过后端 API 服务） */
-const LOCAL_TILES = '/api/tiles/{z}/{x}/{y}.png'
-
-function getTileUrl(): string {
-  // 优先使用本地瓦片（离线部署），否则用高德在线瓦片
-  return LOCAL_TILES
+/** 瓦片源配置：切换此处即可更换地图 */
+const TILE_SOURCES: Record<string, string> = {
+  // 本地离线瓦片（当前为高德深圳，通过后端 /api/tiles/ 服务）
+  local: '/api/tiles/{z}/{x}/{y}.png',
+  // 高德地图在线（中国可用，无需 API Key，主要显示街道）
+  amap: 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
 }
+
+// 切换: 'local'（离线） | 'amap'（在线）
+const TILE_SOURCE: string = 'local'
+function getTileUrl(): string { return TILE_SOURCES[TILE_SOURCE] || TILE_SOURCES.local }
 
 function createIcon(color: string): L.DivIcon {
   return L.divIcon({
@@ -63,7 +65,7 @@ export default function DeviceMap({ mapData }: { mapData: MapData }) {
     localTiles.on('tileerror', () => {
       if (!mapRef.current || amapFallbackRef.current) return
       amapFallbackRef.current = true
-      L.tileLayer(AMAP_TILES, { maxZoom: 18 }).addTo(map)
+      L.tileLayer(TILE_SOURCES.amap, { maxZoom: 18 }).addTo(map)
     })
 
     mapRef.current = map
