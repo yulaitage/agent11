@@ -112,60 +112,37 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   };
 
   // ─── Voice Recording ───────────────────────────────
+  // ─── PCM WAV Recording (compatible + highest quality) ──
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
+  const pcmDataRef = useRef<Float32Array[]>([])
+
   const startRecording = async () => {
     console.log('[Voice] Start requested')
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaStreamRef.current = stream
       console.log('[Voice] Mic stream obtained')
-      // Detect supported mime type (webm not supported on Safari/iOS)
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-          ? 'audio/webm'
-          : MediaRecorder.isTypeSupported('audio/mp4')
-            ? 'audio/mp4'
-            : ''
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
-      console.log('[Voice] Recorder created, mime:', mimeType || 'default')
-      audioChunksRef.current = []
-      mediaRecorderRef.current = recorder
 
-      recorder.ondataavailable = (e) => {
-        console.log('[Voice] Data available:', e.data.size, 'bytes')
-        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      const sampleRate = 16000  // 16kHz (matching Whisper)
+      const audioCtx = new AudioContext({ sampleRate })
+      audioCtxRef.current = audioCtx
+      const source = audioCtx.createMediaStreamSource(stream)
+
+      // ScriptProcessorNode for raw PCM access (deprecated but widely supported)
+      const processor = audioCtx.createScriptProcessor(4096, 1, 1)
+      audioProcessorRef.current = processor
+      pcmDataRef.current = []
+
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0)
+        pcmDataRef.current.push(new Float32Array(input))
       }
 
-      recorder.onstop = async () => {
-        console.log('[Voice] Recording stopped, chunks:', audioChunksRef.current.length)
-        stream.getTracks().forEach(t => t.stop())
-        const blob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/webm' })
-        console.log('[Voice] Blob size:', blob.size, 'bytes')
-        if (blob.size < 100) { setError('录音太短，请重试'); setIsVoiceProcessing(false); return }
-        setIsVoiceProcessing(true)
-        try {
-          const ext = mimeType?.includes('mp4') ? 'mp4' : 'webm'
-          const formData = new FormData()
-          formData.append('file', blob, `recording.${ext}`)
-          console.log('[Voice] Sending to STT...')
-          const res = await fetch('/api/voice/stt', { method: 'POST', body: formData })
-          if (!res.ok) throw new Error('STT failed: ' + res.status)
-          const data = await res.json()
-          console.log('[Voice] STT result:', data)
-          if (data.text) {
-            setHasStarted(true)
-            await sendTextMessage(data.text)
-          } else {
-            setError('未能识别到语音，请重试')
-          }
-        } catch (err) {
-          console.error('[Voice] Recognition failed:', err)
-          setError('语音识别失败，请重试')
-        } finally {
-          setIsVoiceProcessing(false)
-        }
-      }
-      recorder.start(250)  // Collect data every 250ms for complete recording
-      console.log('[Voice] Recording started')
+      source.connect(processor)
+      processor.connect(audioCtx.destination)
+      console.log('[Voice] Recording started (PCM 16kHz)')
       setIsRecording(true)
     } catch (err) {
       console.error('[Voice] Mic access denied:', err)
@@ -174,10 +151,80 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   }
 
   const stopRecording = () => {
-    console.log('[Voice] Stop requested, state:', mediaRecorderRef.current?.state)
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop()
-      setIsRecording(false)
+    console.log('[Voice] Stop requested')
+    if (!audioCtxRef.current || pcmDataRef.current.length === 0) return
+    setIsRecording(false)
+    setIsVoiceProcessing(true)
+
+    try {
+      // Close audio resources
+      audioCtxRef.current.close()
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(t => t.stop())
+      }
+
+      // Build WAV from PCM data
+      const totalLen = pcmDataRef.current.reduce((s, a) => s + a.length, 0)
+      const allPcm = new Float32Array(totalLen)
+      let offset = 0
+      for (const chunk of pcmDataRef.current) {
+        allPcm.set(chunk, offset)
+        offset += chunk.length
+      }
+      console.log('[Voice] PCM samples:', allPcm.length, 'duration:', (allPcm.length / 16000).toFixed(1), 's')
+
+      // Encode as WAV (16-bit, 16kHz, mono)
+      const numSamples = allPcm.length
+      const buffer = new ArrayBuffer(44 + numSamples * 2)
+      const view = new DataView(buffer)
+      const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)) }
+      writeStr(0, 'RIFF')
+      view.setUint32(4, 36 + numSamples * 2, true)
+      writeStr(8, 'WAVE')
+      writeStr(12, 'fmt ')
+      view.setUint32(16, 16, true)
+      view.setUint16(20, 1, true)       // PCM
+      view.setUint16(22, 1, true)       // mono
+      view.setUint32(24, 16000, true)   // sample rate
+      view.setUint32(28, 32000, true)   // byte rate
+      view.setUint16(32, 2, true)       // block align
+      view.setUint16(34, 16, true)      // bits per sample
+      writeStr(36, 'data')
+      view.setUint32(40, numSamples * 2, true)
+      for (let i = 0; i < numSamples; i++) {
+        const s = Math.max(-1, Math.min(1, allPcm[i]))
+        view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
+      }
+
+      const blob = new Blob([buffer], { type: 'audio/wav' })
+      console.log('[Voice] WAV blob size:', blob.size, 'bytes')
+      if (blob.size < 1000) { setError('录音太短，请重试'); setIsVoiceProcessing(false); return }
+
+      // Send to STT
+      const formData = new FormData()
+      formData.append('file', blob, 'recording.wav')
+      console.log('[Voice] Sending to STT...')
+      fetch('/api/voice/stt', { method: 'POST', body: formData })
+        .then(async (res) => {
+          if (!res.ok) throw new Error('STT failed: ' + res.status)
+          const data = await res.json()
+          console.log('[Voice] STT result:', data)
+          if (data.text) {
+            setHasStarted(true)
+            sendTextMessage(data.text)
+          } else {
+            setError('未能识别到语音，请重试')
+          }
+        })
+        .catch((err) => {
+          console.error('[Voice] Recognition failed:', err)
+          setError('语音识别失败，请重试')
+        })
+        .finally(() => setIsVoiceProcessing(false))
+    } catch (err) {
+      console.error('[Voice] Error:', err)
+      setError('语音处理失败')
+      setIsVoiceProcessing(false)
     }
   }
 
