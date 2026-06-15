@@ -113,8 +113,10 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
 
   // ─── Voice Recording ───────────────────────────────
   const startRecording = async () => {
+    console.log('[Voice] Start requested')
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      console.log('[Voice] Mic stream obtained')
       // Detect supported mime type (webm not supported on Safari/iOS)
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
@@ -124,44 +126,55 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
             ? 'audio/mp4'
             : ''
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      console.log('[Voice] Recorder created, mime:', mimeType || 'default')
       audioChunksRef.current = []
       mediaRecorderRef.current = recorder
 
       recorder.ondataavailable = (e) => {
+        console.log('[Voice] Data available:', e.data.size, 'bytes')
         if (e.data.size > 0) audioChunksRef.current.push(e.data)
       }
 
       recorder.onstop = async () => {
+        console.log('[Voice] Recording stopped, chunks:', audioChunksRef.current.length)
         stream.getTracks().forEach(t => t.stop())
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        const blob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/webm' })
+        console.log('[Voice] Blob size:', blob.size, 'bytes')
+        if (blob.size < 100) { setError('录音太短，请重试'); setIsVoiceProcessing(false); return }
         setIsVoiceProcessing(true)
         try {
+          const ext = mimeType?.includes('mp4') ? 'mp4' : 'webm'
           const formData = new FormData()
-          formData.append('file', blob, 'recording.webm')
+          formData.append('file', blob, `recording.${ext}`)
+          console.log('[Voice] Sending to STT...')
           const res = await fetch('/api/voice/stt', { method: 'POST', body: formData })
-          if (!res.ok) throw new Error('STT failed')
+          if (!res.ok) throw new Error('STT failed: ' + res.status)
           const data = await res.json()
+          console.log('[Voice] STT result:', data)
           if (data.text) {
             setHasStarted(true)
-            // Auto-send using the transcribed text directly (avoids stale closure)
-            sendTextMessage(data.text)
+            await sendTextMessage(data.text)
+          } else {
+            setError('未能识别到语音，请重试')
           }
         } catch (err) {
-          console.error('Voice recognition failed:', err)
+          console.error('[Voice] Recognition failed:', err)
           setError('语音识别失败，请重试')
         } finally {
           setIsVoiceProcessing(false)
         }
       }
       recorder.start()
+      console.log('[Voice] Recording started')
       setIsRecording(true)
     } catch (err) {
-      console.error('Mic access denied:', err)
-      setError('无法访问麦克风')
+      console.error('[Voice] Mic access denied:', err)
+      setError('无法访问麦克风，请在浏览器设置中允许麦克风权限')
     }
   }
 
   const stopRecording = () => {
+    console.log('[Voice] Stop requested, state:', mediaRecorderRef.current?.state)
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop()
       setIsRecording(false)
@@ -179,6 +192,8 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   const sendTextMessage = async (text: string) => {
     if (!text.trim()) return
     setInputText(text)
+    // Small delay so React state updates before handleSend reads inputText
+    await new Promise(r => setTimeout(r, 50))
     await handleSend()
   }
 
