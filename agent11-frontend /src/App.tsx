@@ -115,7 +115,15 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      // Detect supported mime type (webm not supported on Safari/iOS)
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : MediaRecorder.isTypeSupported('audio/mp4')
+            ? 'audio/mp4'
+            : ''
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
       audioChunksRef.current = []
       mediaRecorderRef.current = recorder
 
@@ -299,7 +307,8 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
       setIsLoading(false);
     }
   };
-  handleSendRef.current = handleSend;
+  // Keep handleSendRef updated across renders to avoid stale closures
+  useEffect(() => { handleSendRef.current = handleSend; }, [handleSend]);
 
   const handleExportPdf = async () => {
     if (messages.length > 0) {
