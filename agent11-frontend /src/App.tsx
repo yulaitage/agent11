@@ -164,7 +164,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
           setIsVoiceProcessing(false)
         }
       }
-      recorder.start()
+      recorder.start(250)  // Collect data every 250ms for complete recording
       console.log('[Voice] Recording started')
       setIsRecording(true)
     } catch (err) {
