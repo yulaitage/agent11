@@ -54,7 +54,7 @@ async def speech_to_text(file: UploadFile = File(...)):
 
     try:
         model = get_model()
-        segments, info = model.transcribe(tmp_path, beam_size=3, vad_filter=True)
+        segments, info = model.transcribe(tmp_path, beam_size=3, vad_filter=False)
 
         detected_lang = info.language
         text_parts = []
