@@ -15,10 +15,14 @@ def get_model():
     if _model is None:
         try:
             from faster_whisper import WhisperModel
-            model_size = os.environ.get("WHISPER_MODEL", "small")
-            logger.info("loading_whisper_model", model=model_size)
-            _model = WhisperModel(model_size, device="cpu", compute_type="int8")
-            logger.info("whisper_model_loaded", model=model_size)
+            # 使用本地模型路径（避免从 Hugging Face 下载）
+            import os
+            model_path = os.environ.get("WHISPER_MODEL_PATH", "/home/ubuntu/whisper_model")
+            if not os.path.exists(model_path):
+                model_path = "small"  # 兜底：在线下载
+            logger.info("loading_whisper_model", path=model_path)
+            _model = WhisperModel(model_path, device="cpu", compute_type="int8")
+            logger.info("whisper_model_loaded", path=model_path)
         except Exception as e:
             logger.error("whisper_load_failed", error=str(e))
             raise
