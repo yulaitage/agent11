@@ -142,13 +142,9 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
           if (!res.ok) throw new Error('STT failed')
           const data = await res.json()
           if (data.text) {
-            setInputText(data.text)
-            // Auto-send after short delay
-            setTimeout(() => {
-              const input = document.querySelector<HTMLInputElement>('input[type="text"]')
-              if (input) { input.value = data.text; setInputText(data.text) }
-              handleSendRef.current?.()
-            }, 300)
+            setHasStarted(true)
+            // Auto-send using the transcribed text directly (avoids stale closure)
+            sendTextMessage(data.text)
           }
         } catch (err) {
           console.error('Voice recognition failed:', err)
@@ -174,6 +170,17 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
 
   // Ref for voice auto-send (initialized after handleSend)
   const handleSendRef = useRef<() => void>(() => {})
+
+  // Keep latest inputText in a ref so async callbacks can read it
+  const inputTextRef = useRef(inputText)
+  useEffect(() => { inputTextRef.current = inputText }, [inputText])
+
+  // Send text directly (used by voice callback to avoid stale closures)
+  const sendTextMessage = async (text: string) => {
+    if (!text.trim()) return
+    setInputText(text)
+    await handleSend()
+  }
 
   // ─── TTS: speak assistant messages ──────────────────
   const speakLastMessage = (text: string, lang: string) => {
