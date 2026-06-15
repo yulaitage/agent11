@@ -299,6 +299,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
       setIsLoading(false);
     }
   };
+  handleSendRef.current = handleSend;
 
   const handleExportPdf = async () => {
     if (messages.length > 0) {
@@ -831,7 +832,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                 placeholder="Ask Agent 11 to explore your data"
-                className="w-full pl-14 pr-14 py-4 bg-white border border-slate-200 rounded-2xl shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-slate-700 placeholder:text-slate-400"
+                className="w-full pl-28 pr-14 py-4 bg-white border border-slate-200 rounded-2xl shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-slate-700 placeholder:text-slate-400"
               />
               <button
                 onClick={handleSend}
