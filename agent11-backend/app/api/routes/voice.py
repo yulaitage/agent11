@@ -17,7 +17,7 @@ def get_model():
             from faster_whisper import WhisperModel
             # 使用本地模型路径（避免从 Hugging Face 下载）
             import os
-            model_path = os.environ.get("WHISPER_MODEL_PATH", "/home/ubuntu/whisper_model")
+            model_path = os.environ.get("WHISPER_MODEL_PATH", "/home/ubuntu/whisper_tiny_model")
             if not os.path.exists(model_path):
                 model_path = "small"  # 兜底：在线下载
             logger.info("loading_whisper_model", path=model_path)
