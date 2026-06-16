@@ -117,6 +117,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
   const pcmDataRef = useRef<Float32Array[]>([])
+  const sampleRateRef = useRef(16000)
 
   const startRecording = async () => {
     console.log('[Voice] Start requested')
@@ -125,8 +126,8 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
       mediaStreamRef.current = stream
       console.log('[Voice] Mic stream obtained')
 
-      const sampleRate = 16000  // 16kHz (matching Whisper)
-      const audioCtx = new AudioContext({ sampleRate })
+      const audioCtx = new AudioContext()  // Use browser's default sample rate
+      sampleRateRef.current = audioCtx.sampleRate
       audioCtxRef.current = audioCtx
       const source = audioCtx.createMediaStreamSource(stream)
 
@@ -173,7 +174,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
       }
       console.log('[Voice] PCM samples:', allPcm.length, 'duration:', (allPcm.length / 16000).toFixed(1), 's')
 
-      // Encode as WAV (16-bit, 16kHz, mono)
+      // Encode as WAV (16-bit, mono)
       const numSamples = allPcm.length
       const buffer = new ArrayBuffer(44 + numSamples * 2)
       const view = new DataView(buffer)
@@ -185,8 +186,8 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
       view.setUint32(16, 16, true)
       view.setUint16(20, 1, true)       // PCM
       view.setUint16(22, 1, true)       // mono
-      view.setUint32(24, 16000, true)   // sample rate
-      view.setUint32(28, 32000, true)   // byte rate
+      view.setUint32(24, sampleRateRef.current, true)
+      view.setUint32(28, sampleRateRef.current * 2, true)
       view.setUint16(32, 2, true)       // block align
       view.setUint16(34, 16, true)      // bits per sample
       writeStr(36, 'data')
