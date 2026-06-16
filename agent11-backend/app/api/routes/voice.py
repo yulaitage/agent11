@@ -53,8 +53,26 @@ async def speech_to_text(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
+        import subprocess
+        resampled_path = tmp_path + "_16k.wav"
+        logger.info("stt_ffmpeg_start", input_size=os.path.getsize(tmp_path))
+        result = subprocess.run([
+            "ffmpeg", "-y", "-i", tmp_path,
+            "-ar", "16000", "-ac", "1", "-sample_fmt", "s16",
+            resampled_path
+        ], capture_output=True, timeout=30)
+        if result.returncode != 0:
+            logger.error("stt_ffmpeg_failed", stderr=result.stderr[:300])
+            raise RuntimeError(f"ffmpeg error: {result.stderr[:200]}")
+        wav_size = os.path.getsize(resampled_path)
+        logger.info("stt_ffmpeg_done", resampled_size=wav_size)
+
+        # Check if the resampled file has actual audio data (WAV > 44 bytes header)
+        if wav_size < 1000:
+            logger.warning("stt_ffmpeg_too_small", size=wav_size)
+
         model = get_model()
-        segments, info = model.transcribe(tmp_path, beam_size=3, vad_filter=False)
+        segments, info = model.transcribe(resampled_path, beam_size=3, vad_filter=False)
 
         detected_lang = info.language
         text_parts = []
@@ -63,6 +81,11 @@ async def speech_to_text(file: UploadFile = File(...)):
 
         full_text = " ".join(text_parts)
         logger.info("stt_result", language=detected_lang, text=full_text[:100])
+
+        try:
+            os.unlink(resampled_path)
+        except Exception:
+            pass
 
         return {
             "text": full_text,
