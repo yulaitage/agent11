@@ -118,6 +118,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
   const pcmDataRef = useRef<Float32Array[]>([])
   const sampleRateRef = useRef(16000)
+  const sttLangRef = useRef('zh')  // Last detected STT language
 
   const startRecording = async () => {
     console.log('[Voice] Start requested')
@@ -212,7 +213,8 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
           console.log('[Voice] STT result:', data)
           if (data.text) {
             setHasStarted(true)
-            sendTextMessage(data.text)
+            sttLangRef.current = data.language || 'zh'
+            sendTextMessage(data.text, data.language)
           } else {
             setError('未能识别到语音，请重试')
           }
@@ -237,10 +239,10 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   useEffect(() => { inputTextRef.current = inputText }, [inputText])
 
   // Send text directly (used by voice callback to avoid stale closures)
-  const sendTextMessage = async (text: string) => {
+  const sendTextMessage = async (text: string, sttLang?: string) => {
     if (!text.trim()) return
+    if (sttLang) sttLangRef.current = sttLang
     setInputText(text)
-    // Small delay so React state updates before handleSend reads inputText
     await new Promise(r => setTimeout(r, 50))
     await handleSend()
   }
@@ -339,10 +341,11 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
             return prev;
           });
           setIsLoading(false);
-          // TTS: speak the assistant response
+          // TTS: speak the assistant response (match STT language)
           if (message.content) {
-            const isEn = !/[一-鿿]/.test(message.content.slice(0, 20))
-            speakLastMessage(message.content, isEn ? 'en-US' : 'zh-HK')
+            const sttLang = sttLangRef.current
+            const ttsLang = sttLang === 'yue' ? 'zh-HK' : sttLang === 'zh' ? 'zh-CN' : 'en-US'
+            speakLastMessage(message.content, ttsLang)
           }
         },
         // onError
