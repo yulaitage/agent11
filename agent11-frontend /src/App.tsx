@@ -119,7 +119,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   const startRecording = async () => {
     console.log('[Voice] Start')
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
       console.log('[Voice] Mic OK')
       const ctx = new AudioContext()
       audioCtxRef.current = ctx
@@ -158,7 +158,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
     v.setUint16(32, 2, true); v.setUint16(34, 16, true)
     w(36, 'data'); v.setUint32(40, len * 2, true)
     for (let i = 0; i < len; i++) {
-      const s = Math.max(-1, Math.min(1, all[i]))
+      const s = Math.max(-1, Math.min(1, all[i] * 2.0))  // 2x gain boost
       v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
     }
 
