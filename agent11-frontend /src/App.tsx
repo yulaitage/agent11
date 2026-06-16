@@ -111,62 +111,71 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
     }
   };
 
-  // ─── Voice Recording (MediaRecorder + ffmpeg decoding) ──
+  // ─── Voice Recording (AudioWorklet PCM capture → WAV) ──
   const sttLangRef = useRef('zh')
+  const pcmDataRef = useRef<Float32Array[]>([])
+  const audioCtxRef = useRef<AudioContext | null>(null)
 
   const startRecording = async () => {
-    console.log('[Voice] Start requested')
+    console.log('[Voice] Start')
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 48000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      })
-      console.log('[Voice] Mic obtained')
-      const mt = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''
-      const recorder = new MediaRecorder(stream, mt ? { mimeType: mt } : {})
-      audioChunksRef.current = []
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data) }
-      recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop())
-        const blob = new Blob(audioChunksRef.current, { type: mt || 'audio/webm' })
-        console.log('[Voice] Blob:', blob.size, 'bytes')
-        if (blob.size < 500) { setError('录音太短'); setIsVoiceProcessing(false); return }
-        setIsVoiceProcessing(true)
-        try {
-          const formData = new FormData()
-          formData.append('file', blob, 'recording.webm')
-          console.log('[Voice] Sending to STT...')
-          const res = await fetch('/api/voice/stt', { method: 'POST', body: formData })
-          if (!res.ok) throw new Error('STT failed: ' + res.status)
-          const data = await res.json()
-          console.log('[Voice] STT:', data)
-          if (data.text) {
-            setHasStarted(true)
-            sttLangRef.current = data.language || 'zh'
-            await sendTextMessage(data.text, data.language)
-          } else { setError('未能识别到语音，请重试') }
-        } catch (err) { console.error('[Voice] Failed:', err); setError('语音识别失败，请重试') }
-        finally { setIsVoiceProcessing(false) }
-      }
-      recorder.start(250)
-      mediaRecorderRef.current = recorder
-      console.log('[Voice] Recording started')
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
+      console.log('[Voice] Mic OK')
+      const ctx = new AudioContext()
+      audioCtxRef.current = ctx
+      const src = ctx.createMediaStreamSource(stream)
+      const rec = ctx.createScriptProcessor(4096, 1, 1)
+      pcmDataRef.current = []
+      rec.onaudioprocess = (e) => { pcmDataRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0))) }
+      src.connect(rec); rec.connect(ctx.destination)
+      mediaRecorderRef.current = rec as any  // Store ref for stop
+      console.log('[Voice] Recording', ctx.sampleRate, 'Hz')
       setIsRecording(true)
     } catch (err) { console.error('[Voice] Mic error:', err); setError('无法访问麦克风') }
   }
 
   const stopRecording = () => {
     console.log('[Voice] Stop')
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop()
-      setIsRecording(false)
+    if (!audioCtxRef.current || pcmDataRef.current.length === 0) return
+    setIsRecording(false); setIsVoiceProcessing(true)
+    const ctx = audioCtxRef.current
+    const sr = ctx.sampleRate
+    ctx.close()
+
+    // Build WAV from PCM
+    const total = pcmDataRef.current.reduce((s, a) => s + a.length, 0)
+    const all = new Float32Array(total)
+    let off = 0; for (const c of pcmDataRef.current) { all.set(c, off); off += c.length }
+    const len = all.length
+    console.log('[Voice] PCM', len, 'samples,', sr, 'Hz,', (len / sr).toFixed(1), 's')
+
+    const buf = new ArrayBuffer(44 + len * 2)
+    const v = new DataView(buf)
+    const w = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)) }
+    w(0, 'RIFF'); v.setUint32(4, 36 + len * 2, true); w(8, 'WAVE')
+    w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true)
+    v.setUint16(22, 1, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true)
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true)
+    w(36, 'data'); v.setUint32(40, len * 2, true)
+    for (let i = 0; i < len; i++) {
+      const s = Math.max(-1, Math.min(1, all[i]))
+      v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
     }
+
+    const blob = new Blob([buf], { type: 'audio/wav' })
+    console.log('[Voice] WAV:', blob.size, 'bytes')
+
+    const formData = new FormData()
+    formData.append('file', blob, 'recording.wav')
+    fetch('/api/voice/stt', { method: 'POST', body: formData })
+      .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+      .then(d => {
+        console.log('[Voice] STT:', d)
+        if (d.text) { setHasStarted(true); sttLangRef.current = d.language || 'zh'; sendTextMessage(d.text, d.language) }
+        else { setError('未能识别到语音，请重试') }
+      })
+      .catch(e => { console.error('[Voice] Fail:', e); setError('语音识别失败') })
+      .finally(() => setIsVoiceProcessing(false))
   }
 
   // Ref for voice auto-send (initialized after handleSend)
