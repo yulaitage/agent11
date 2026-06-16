@@ -111,71 +111,57 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
     }
   };
 
-  // ─── Voice Recording (AudioWorklet PCM capture → WAV) ──
+  // ─── Voice Recording (Web Speech API — fastest, built-in) ──
   const sttLangRef = useRef('zh')
-  const pcmDataRef = useRef<Float32Array[]>([])
-  const audioCtxRef = useRef<AudioContext | null>(null)
+  const recognitionRef = useRef<any>(null)
 
-  const startRecording = async () => {
+  const startRecording = () => {
     console.log('[Voice] Start')
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
-      console.log('[Voice] Mic OK')
-      const ctx = new AudioContext()
-      audioCtxRef.current = ctx
-      const src = ctx.createMediaStreamSource(stream)
-      const rec = ctx.createScriptProcessor(4096, 1, 1)
-      pcmDataRef.current = []
-      rec.onaudioprocess = (e) => { pcmDataRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0))) }
-      src.connect(rec); rec.connect(ctx.destination)
-      mediaRecorderRef.current = rec as any  // Store ref for stop
-      console.log('[Voice] Recording', ctx.sampleRate, 'Hz')
-      setIsRecording(true)
-    } catch (err) { console.error('[Voice] Mic error:', err); setError('无法访问麦克风') }
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) { setError('浏览器不支持语音识别'); return }
+
+    const rec = new SpeechRecognition()
+    rec.continuous = true
+    rec.interimResults = false
+    rec.lang = 'zh-CN'  // Will be updated per utterance
+    rec.maxAlternatives = 1
+
+    rec.onresult = (event: any) => {
+      const text = event.results[event.results.length - 1][0].transcript
+      console.log('[Voice] Recognized:', text)
+      // Detect language from recognition
+      const lang = rec.lang
+      sttLangRef.current = lang.startsWith('zh') ? 'zh' : lang.startsWith('yue') ? 'yue' : 'en'
+      rec.stop()
+      if (text.trim()) {
+        setHasStarted(true)
+        sendTextMessage(text.trim(), sttLangRef.current)
+      } else {
+        setError('未能识别到语音')
+      }
+    }
+
+    rec.onerror = (event: any) => {
+      console.error('[Voice] Error:', event.error)
+      setError(event.error === 'no-speech' ? '未检测到语音' : '语音识别失败')
+      setIsRecording(false)
+    }
+
+    rec.onend = () => { setIsRecording(false); setIsVoiceProcessing(false) }
+
+    recognitionRef.current = rec
+    setIsVoiceProcessing(true)
+    rec.start()
+    setIsRecording(true)
+    console.log('[Voice] Recording...')
   }
 
   const stopRecording = () => {
     console.log('[Voice] Stop')
-    if (!audioCtxRef.current || pcmDataRef.current.length === 0) return
-    setIsRecording(false); setIsVoiceProcessing(true)
-    const ctx = audioCtxRef.current
-    const sr = ctx.sampleRate
-    ctx.close()
-
-    // Build WAV from PCM
-    const total = pcmDataRef.current.reduce((s, a) => s + a.length, 0)
-    const all = new Float32Array(total)
-    let off = 0; for (const c of pcmDataRef.current) { all.set(c, off); off += c.length }
-    const len = all.length
-    console.log('[Voice] PCM', len, 'samples,', sr, 'Hz,', (len / sr).toFixed(1), 's')
-
-    const buf = new ArrayBuffer(44 + len * 2)
-    const v = new DataView(buf)
-    const w = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)) }
-    w(0, 'RIFF'); v.setUint32(4, 36 + len * 2, true); w(8, 'WAVE')
-    w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true)
-    v.setUint16(22, 1, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true)
-    v.setUint16(32, 2, true); v.setUint16(34, 16, true)
-    w(36, 'data'); v.setUint32(40, len * 2, true)
-    for (let i = 0; i < len; i++) {
-      const s = Math.max(-1, Math.min(1, all[i] * 2.0))  // 2x gain boost
-      v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
+    if (recognitionRef.current) {
+      recognitionRef.current.stop()
+      recognitionRef.current = null
     }
-
-    const blob = new Blob([buf], { type: 'audio/wav' })
-    console.log('[Voice] WAV:', blob.size, 'bytes')
-
-    const formData = new FormData()
-    formData.append('file', blob, 'recording.wav')
-    fetch('/api/voice/stt', { method: 'POST', body: formData })
-      .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
-      .then(d => {
-        console.log('[Voice] STT:', d)
-        if (d.text) { setHasStarted(true); sttLangRef.current = d.language || 'zh'; sendTextMessage(d.text, d.language) }
-        else { setError('未能识别到语音，请重试') }
-      })
-      .catch(e => { console.error('[Voice] Fail:', e); setError('语音识别失败') })
-      .finally(() => setIsVoiceProcessing(false))
   }
 
   // Ref for voice auto-send (initialized after handleSend)
