@@ -111,66 +111,74 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
     }
   };
 
-  // ─── Voice Recording (click-to-start, click-to-stop) ──
+  // ─── Voice Recording (PCM → WAV → Whisper) ──
   const sttLangRef = useRef('zh')
-  const recognitionRef = useRef<any>(null)
-  const finalTextRef = useRef('')
+  const pcmChunks = useRef<Float32Array[]>([])
+  const audioCtx = useRef<AudioContext | null>(null)
+  const mediaStr = useRef<MediaStream | null>(null)
 
-  const startRecording = () => {
+  const startRecording = async () => {
     console.log('[Voice] Start')
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) { setError('浏览器不支持语音识别'); return }
-
-    finalTextRef.current = ''
-    const rec = new SpeechRecognition()
-    rec.continuous = true
-    rec.interimResults = true
-    rec.lang = 'zh-CN'
-    rec.maxAlternatives = 1
-
-    rec.onresult = (event: any) => {
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          finalTextRef.current += event.results[i][0].transcript
-        }
-      }
-    }
-
-    rec.onerror = (event: any) => {
-      console.error('[Voice] Error:', event.error)
-      if (event.error !== 'no-speech' && event.error !== 'aborted') {
-        setError('语音识别失败: ' + event.error)
-      }
-    }
-
-    rec.onend = () => {
-      console.log('[Voice] Ended. Text:', finalTextRef.current)
-      setIsRecording(false)
-      setIsVoiceProcessing(false)
-      if (finalTextRef.current.trim()) {
-        setHasStarted(true)
-        sendTextMessage(finalTextRef.current.trim(), 'zh')
-      }
-    }
-
-    recognitionRef.current = rec
     try {
-      rec.start()
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false } })
+      mediaStr.current = stream
+      const ctx = new AudioContext()
+      audioCtx.current = ctx
+      const src = ctx.createMediaStreamSource(stream)
+      const proc = ctx.createScriptProcessor(4096, 1, 1)
+      pcmChunks.current = []
+      proc.onaudioprocess = (e) => { pcmChunks.current.push(new Float32Array(e.inputBuffer.getChannelData(0))) }
+      src.connect(proc)
+      proc.connect(ctx.destination)
+      console.log('[Voice] Recording', ctx.sampleRate, 'Hz')
       setIsRecording(true)
-      console.log('[Voice] Started - speak now, click mic to stop')
-    } catch (e) {
-      console.error('[Voice] Start error:', e)
-      setError('语音启动失败')
-      setIsRecording(false)
-    }
+    } catch (err) { console.error('[Voice] Mic error:', err); setError('无法访问麦克风') }
   }
 
   const stopRecording = () => {
     console.log('[Voice] Stop')
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
-      recognitionRef.current = null
-    }
+    if (!audioCtx.current || pcmChunks.current.length === 0) return
+    setIsRecording(false)
+    setIsVoiceProcessing(true)
+    const ctx = audioCtx.current
+    const sr = ctx.sampleRate
+    ctx.close()
+    if (mediaStr.current) mediaStr.current.getTracks().forEach(t => t.stop())
+
+    // Combine PCM chunks
+    const total = pcmChunks.current.reduce((s, a) => s + a.length, 0)
+    const all = new Float32Array(total)
+    let off = 0; for (const c of pcmChunks.current) { all.set(c, off); off += c.length }
+
+    // Normalize: find peak and scale to max volume
+    let peak = 0; for (let i = 0; i < total; i++) { const v = Math.abs(all[i]); if (v > peak) peak = v }
+    const gain = peak > 0.01 ? Math.min(0.95 / peak, 10) : 1.0
+    for (let i = 0; i < total; i++) all[i] = Math.max(-1, Math.min(1, all[i] * gain))
+
+    console.log('[Voice] PCM', total, 'samples,', sr, 'Hz,', (total / sr).toFixed(1), 's, peak:', peak.toFixed(4), 'gain:', gain.toFixed(2))
+
+    // Build WAV
+    const len = total; const buf = new ArrayBuffer(44 + len * 2); const v = new DataView(buf)
+    const w = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)) }
+    w(0, 'RIFF'); v.setUint32(4, 36 + len * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true)
+    v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true)
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, len * 2, true)
+    for (let i = 0; i < len; i++) v.setInt16(44 + i * 2, all[i] < 0 ? all[i] * 0x8000 : all[i] * 0x7FFF, true)
+
+    const blob = new Blob([buf], { type: 'audio/wav' })
+    console.log('[Voice] WAV:', blob.size, 'bytes')
+
+    const fd = new FormData()
+    fd.append('file', blob, 'recording.wav')
+    fetch('/api/voice/stt', { method: 'POST', body: fd })
+      .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+      .then(d => {
+        console.log('[Voice] STT:', d)
+        if (d.text) { setHasStarted(true); sttLangRef.current = d.language || 'zh'; sendTextMessage(d.text, d.language) }
+        else { setError('未能识别到语音，请重试') }
+      })
+      .catch(e => { console.error('[Voice] Fail:', e); setError('语音识别失败') })
+      .finally(() => setIsVoiceProcessing(false))
   }
 
   // Ref for voice auto-send (initialized after handleSend)
