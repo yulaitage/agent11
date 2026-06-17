@@ -111,60 +111,58 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
     }
   };
 
-  // ─── Voice Recording (Web Speech API — fastest, built-in) ──
+  // ─── Voice Recording (click-to-start, click-to-stop) ──
   const sttLangRef = useRef('zh')
   const recognitionRef = useRef<any>(null)
+  const finalTextRef = useRef('')
 
   const startRecording = () => {
     console.log('[Voice] Start')
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     if (!SpeechRecognition) { setError('浏览器不支持语音识别'); return }
 
+    finalTextRef.current = ''
     const rec = new SpeechRecognition()
-    rec.continuous = false
+    rec.continuous = true
     rec.interimResults = true
     rec.lang = 'zh-CN'
-    rec.maxAlternatives = 3
+    rec.maxAlternatives = 1
 
     rec.onresult = (event: any) => {
-      const last = event.results.length - 1
-      const text = event.results[last][0].transcript
-      console.log('[Voice] Recognized:', text)
-      if (event.results[last].isFinal && text.trim()) {
-        setHasStarted(true)
-        const lang = rec.lang
-        sttLangRef.current = lang.startsWith('zh') ? 'zh' : 'en'
-        rec.stop()
-        sendTextMessage(text.trim(), sttLangRef.current)
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          finalTextRef.current += event.results[i][0].transcript
+        }
       }
     }
 
     rec.onerror = (event: any) => {
       console.error('[Voice] Error:', event.error)
-      const msgs: Record<string, string> = {
-        'no-speech': '未检测到语音，请重试',
-        'aborted': '录音已取消',
-        'audio-capture': '无法访问麦克风',
-        'network': '网络错误',
-        'not-allowed': '麦克风权限被拒绝',
-        'service-not-allowed': '语音服务不可用',
-        'language-not-supported': '语言不支持',
+      if (event.error !== 'no-speech' && event.error !== 'aborted') {
+        setError('语音识别失败: ' + event.error)
       }
-      setError(msgs[event.error] || '语音识别失败: ' + event.error)
-      setIsRecording(false)
-      setIsVoiceProcessing(false)
     }
 
     rec.onend = () => {
-      console.log('[Voice] Ended')
+      console.log('[Voice] Ended. Text:', finalTextRef.current)
       setIsRecording(false)
       setIsVoiceProcessing(false)
+      if (finalTextRef.current.trim()) {
+        setHasStarted(true)
+        sendTextMessage(finalTextRef.current.trim(), 'zh')
+      }
     }
 
     recognitionRef.current = rec
-    setIsVoiceProcessing(true)
-    try { rec.start(); setIsRecording(true); console.log('[Voice] Started') }
-    catch (e) { console.error('[Voice] Start error:', e); setError('语音启动失败'); setIsVoiceProcessing(false) }
+    try {
+      rec.start()
+      setIsRecording(true)
+      console.log('[Voice] Started - speak now, click mic to stop')
+    } catch (e) {
+      console.error('[Voice] Start error:', e)
+      setError('语音启动失败')
+      setIsRecording(false)
+    }
   }
 
   const stopRecording = () => {
