@@ -120,7 +120,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   const startRecording = async () => {
     console.log('[Voice] Start')
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false } })
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
       mediaStr.current = stream
       const ctx = new AudioContext()
       audioCtx.current = ctx
@@ -152,7 +152,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
 
     // Normalize: find peak and scale to max volume
     let peak = 0; for (let i = 0; i < total; i++) { const v = Math.abs(all[i]); if (v > peak) peak = v }
-    const gain = peak > 0.01 ? Math.min(0.95 / peak, 10) : 1.0
+    const gain = peak > 0.001 ? Math.min(0.95 / peak, 100) : 1.0
     for (let i = 0; i < total; i++) all[i] = Math.max(-1, Math.min(1, all[i] * gain))
 
     console.log('[Voice] PCM', total, 'samples,', sr, 'Hz,', (total / sr).toFixed(1), 's, peak:', peak.toFixed(4), 'gain:', gain.toFixed(2))
