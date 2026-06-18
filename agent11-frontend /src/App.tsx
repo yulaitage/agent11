@@ -120,7 +120,8 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
   const startRecording = async () => {
     console.log('[Voice] Start')
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+      // CRITICAL: Use autoGainControl:true so browser adjusts mic gain for speech
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, noiseSuppression: true, autoGainControl: true } })
       mediaStr.current = stream
       const ctx = new AudioContext()
       audioCtx.current = ctx
@@ -129,8 +130,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
       pcmChunks.current = []
       proc.onaudioprocess = (e) => { pcmChunks.current.push(new Float32Array(e.inputBuffer.getChannelData(0))) }
       src.connect(proc)
-      proc.connect(ctx.destination)
-      console.log('[Voice] Recording', ctx.sampleRate, 'Hz')
+      // IMPORTANT: Do NOT connect proc to ctx.destination — that routes mic to speakers causing feedback
       setIsRecording(true)
     } catch (err) { console.error('[Voice] Mic error:', err); setError('无法访问麦克风') }
   }
@@ -214,7 +214,9 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
 
   const handleSend = async () => {
     setError(null);
-    if (!inputText.trim()) return;
+    // Read from ref to avoid stale closures (voice callback relies on this)
+    const text = (inputTextRef?.current || inputText).trim();
+    if (!text) return;
 
     let chatId = currentChatId;
 
@@ -262,7 +264,7 @@ function HomeContent({ showSettingsPopup, setShowSettingsPopup }: {
       await chatApi.sendMessageStream(
         chatId,
         {
-          message: inputText,
+          message: text,
           skill: activeSkill ?? null,
         },
         // onChunk - streaming content

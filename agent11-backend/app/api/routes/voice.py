@@ -17,7 +17,7 @@ def get_model():
             from faster_whisper import WhisperModel
             # 使用本地模型路径（避免从 Hugging Face 下载）
             import os
-            model_path = os.environ.get("WHISPER_MODEL_PATH", "/home/ubuntu/whisper_tiny_model")
+            model_path = os.environ.get("WHISPER_MODEL_PATH", "/home/ubuntu/whisper_model")
             if not os.path.exists(model_path):
                 model_path = "small"  # 兜底：在线下载
             logger.info("loading_whisper_model", path=model_path)
@@ -72,7 +72,7 @@ async def speech_to_text(file: UploadFile = File(...)):
             logger.warning("stt_ffmpeg_too_small", size=wav_size)
 
         model = get_model()
-        segments, info = model.transcribe(resampled_path, beam_size=3, vad_filter=False)
+        segments, info = model.transcribe(resampled_path, beam_size=3, vad_filter=True)
 
         detected_lang = info.language
         text_parts = []
